@@ -25,15 +25,12 @@ type TrimOutput = (
 // ============================================================================
 
 #[pyfunction]
-#[pyo3(signature = (wgt, margin_indices, margin_targets, ll_bound=None, up_bound=None, tol=1e-6, max_iter=100))]
-#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (wgt, margin_indices, margin_targets, tol=1e-6, max_iter=100))]
 pub(crate) fn rake(
     py: Python<'_>,
     wgt: PyReadonlyArray2<f64>,
     margin_indices: Vec<PyReadonlyArray1<i64>>,
     margin_targets: Vec<PyReadonlyArray1<f64>>,
-    ll_bound: Option<f64>,
-    up_bound: Option<f64>,
     tol: f64,
     max_iter: usize,
 ) -> PyResult<Py<PyArray2<f64>>> {
@@ -47,10 +44,8 @@ pub(crate) fn rake(
         .map(|x| x.as_array().to_owned())
         .collect();
 
-    let result = crate::weighting::raking::rake_impl(
-        wgt_arr, &indices, &targets, ll_bound, up_bound, tol, max_iter,
-    )
-    .map_err(|e| to_py_err(&e))?;
+    let result = crate::weighting::raking::rake_impl(wgt_arr, &indices, &targets, tol, max_iter)
+        .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -216,7 +211,7 @@ type BoundedOutput = (
 );
 
 #[pyfunction]
-#[pyo3(signature = (wgt, x_matrix, totals, lower, upper, tol, max_iter, scale=None))]
+#[pyo3(signature = (wgt, x_matrix, totals, lower, upper, tol, max_iter, scale=None, distance="linear"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn calibrate_bounded(
     py: Python<'_>,
@@ -228,9 +223,12 @@ pub(crate) fn calibrate_bounded(
     tol: f64,
     max_iter: usize,
     scale: Option<PyReadonlyArray1<f64>>,
+    distance: &str,
 ) -> PyResult<BoundedOutput> {
+    let distance =
+        crate::weighting::calibration::Distance::parse(distance).map_err(|e| to_py_err(&e))?;
     let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
-    let (w, fits) = crate::weighting::calibration::calibrate_linear_bounded(
+    let (w, fits) = crate::weighting::calibration::calibrate_bounded(
         wgt.as_array(),
         x_matrix.as_array(),
         totals.as_array(),
@@ -240,6 +238,7 @@ pub(crate) fn calibrate_bounded(
             upper,
             tol,
             max_iter,
+            distance,
         },
     )
     .map_err(|e| to_py_err(&e))?;
@@ -262,7 +261,7 @@ type BoundedByDomainOutput = (
 );
 
 #[pyfunction]
-#[pyo3(signature = (wgt, x_matrix, domain, controls_dict, lower, upper, tol, max_iter, scale=None))]
+#[pyo3(signature = (wgt, x_matrix, domain, controls_dict, lower, upper, tol, max_iter, scale=None, distance="linear"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn calibrate_bounded_by_domain(
     py: Python<'_>,
@@ -275,7 +274,10 @@ pub(crate) fn calibrate_bounded_by_domain(
     tol: f64,
     max_iter: usize,
     scale: Option<PyReadonlyArray1<f64>>,
+    distance: &str,
 ) -> PyResult<BoundedByDomainOutput> {
+    let distance =
+        crate::weighting::calibration::Distance::parse(distance).map_err(|e| to_py_err(&e))?;
     let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
     let controls: std::collections::HashMap<i64, Array1<f64>> = controls_dict
         .into_iter()
@@ -292,6 +294,7 @@ pub(crate) fn calibrate_bounded_by_domain(
             upper,
             tol,
             max_iter,
+            distance,
         },
     )
     .map_err(|e| to_py_err(&e))?;

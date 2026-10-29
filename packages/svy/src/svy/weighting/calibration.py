@@ -27,8 +27,6 @@ to Python callers.
 
 from __future__ import annotations
 
-import math
-
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import msgspec
@@ -41,12 +39,6 @@ from svy.errors import Code, WeightingWarning
 try:
     from svy_rs._internal import calibrate as rust_calibrate  # type: ignore[import-untyped]
     from svy_rs._internal import (
-        calibrate_bounded as rust_calibrate_bounded,  # type: ignore[import-untyped]
-    )
-    from svy_rs._internal import (
-        calibrate_bounded_by_domain as rust_calibrate_bounded_by_domain,  # type: ignore[import-untyped]
-    )
-    from svy_rs._internal import (
         calibrate_by_domain as rust_calibrate_by_domain,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
@@ -54,8 +46,6 @@ try:
     )
 except ImportError:  # pragma: no cover
     rust_calibrate = None
-    rust_calibrate_bounded = None
-    rust_calibrate_bounded_by_domain = None
     rust_calibrate_by_domain = None
     rust_calibrate_parallel = None
 
@@ -64,7 +54,13 @@ from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category, Number
 from svy.errors import WeightingError
 from svy.errors._findings import Severity, check_on_finding, finding_level
-from svy.errors._weighting import show, show_list
+from svy.errors._weighting import show
+from svy.weighting._bounded import (
+    bounded_solve,
+    not_converged,
+    record_not_converged,
+    solve_bounded,
+)
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._engine import (
     AUX_PREFIX,
@@ -74,7 +70,6 @@ from svy.weighting._engine import (
     control_name,
     record_null_rows,
     record_trim_cycle,
-    resolve_bounds,
     unreachable_controls,
 )
 from svy.weighting._keys import (
@@ -257,7 +252,7 @@ def calibrate(
 ) -> Sample:
     ctx = "Sample.weighting.calibrate"
     check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
-    _bounded_solve(bounds, tol, max_iter, trimming, where=ctx)
+    bounded_solve(bounds, tol, max_iter, trimming, where=ctx, distance="linear")
 
     scope = _where_mask(sample._data, where, where=ctx)
     if scope is not None:
@@ -409,131 +404,6 @@ def _control_display(term: Feature, label: Category) -> str:
     return str(term)
 
 
-class _BoundedSolve(msgspec.Struct, frozen=True):
-    lower: float  # -inf when open
-    upper: float  # inf when open
-    tol: float
-    max_iter: int
-    bounds: tuple[float | None, float | None]  # as given, for messages
-
-
-def _bounded_solve(
-    bounds: Any, tol: Any, max_iter: Any, trimming: TrimConfig | None, *, where: str
-) -> _BoundedSolve | None:
-    """Validate ``bounds``, ``tol`` and ``max_iter``; None when no side of ``bounds`` is set,
-    which keeps the closed-form solve, as R does for ``bounds=c(-Inf, Inf)``."""
-    lo, hi = resolve_bounds(bounds, where=where)
-    if isinstance(tol, bool) or not isinstance(tol, (int, float)):
-        raise WeightingError.invalid_type(
-            where=where, param="tol", got=tol, expected="a positive number"
-        )
-    if not (math.isfinite(tol) and tol > 0):
-        raise WeightingError.invalid_range(
-            where=where,
-            param="tol",
-            got=tol,
-            detail="Parameter 'tol' must be finite and greater than 0.",
-        )
-    if isinstance(max_iter, bool) or not isinstance(max_iter, int):
-        raise WeightingError.invalid_type(
-            where=where, param="max_iter", got=max_iter, expected="an integer >= 1"
-        )
-    if max_iter < 1:
-        raise WeightingError.invalid_range(
-            where=where,
-            param="max_iter",
-            got=max_iter,
-            detail="Parameter 'max_iter' must be at least 1.",
-        )
-    if lo is None and hi is None:
-        return None
-    if trimming is not None:
-        raise WeightingError.not_supported_yet(
-            where=where,
-            param="trimming",
-            got=show(trimming),
-            hint=("bounds= already holds g within (lo, hi). Use bounds= or trimming=, not both."),
-        )
-    return _BoundedSolve(
-        lower=-math.inf if lo is None else float(lo),
-        upper=math.inf if hi is None else float(hi),
-        tol=float(tol),
-        max_iter=max_iter,
-        bounds=(lo, hi),
-    )
-
-
-def _calibrate_bounded(
-    W: np.ndarray,
-    X: np.ndarray,
-    solve: _BoundedSolve,
-    *,
-    scale: np.ndarray,
-    totals: np.ndarray,
-    domain_indices: np.ndarray | None,
-    controls_by_domain: dict[int, list[float]],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Bounded weights for each column of ``W``, and per domain (rows) and column the largest
-    ``|misfit| / (1 + |t|)`` and the Newton steps taken; a single row without domains."""
-    args = (solve.lower, solve.upper, solve.tol, solve.max_iter, scale)
-    if domain_indices is None:
-        assert rust_calibrate_bounded is not None  # noqa: S101
-        out, achieved, steps = rust_calibrate_bounded(W, X, totals, *args)
-        return out, achieved[None, :], steps[None, :]
-    assert rust_calibrate_bounded_by_domain is not None  # noqa: S101
-    out, doms, achieved_d, steps_d = rust_calibrate_bounded_by_domain(
-        W, X, domain_indices, controls_by_domain, *args
-    )
-    achieved = np.empty_like(achieved_d)
-    steps = np.empty_like(steps_d)
-    achieved[doms] = achieved_d
-    steps[doms] = steps_d
-    return out, achieved, steps
-
-
-def _bounded_not_converged(
-    solve: _BoundedSolve,
-    achieved: np.ndarray,
-    steps: np.ndarray,
-    *,
-    where: str,
-    domains: list[Any],
-    replicates: Sequence[str] = (),
-) -> WeightingError | None:
-    """WEIGHTING_NOT_CONVERGED naming the domains (or replicates) whose solve stopped short."""
-    failed = ~(achieved < solve.tol)  # NaN counts as failed
-    if not failed.any():
-        return None
-    what = "Bounded calibration"
-    got: dict[str, Any] = {
-        "max_iter": solve.max_iter,
-        "achieved": float(np.nanmax(np.where(failed, achieved, np.nan))),
-    }
-    if replicates:
-        names = [replicates[j] for j in np.flatnonzero(failed.any(axis=0))]
-        what += f" of replicate weight(s) {show_list(names)}"
-        got["replicates"] = names
-    elif domains:
-        doms = [domains[d] for d in np.flatnonzero(failed[:, 0])]
-        what += f" in domain(s) {show_list(doms)}"
-        got["domains"] = doms
-    else:
-        got["steps"] = int(steps[0, 0])
-    return WeightingError.not_converged(
-        where=where,
-        method="calibrate",
-        what=what,
-        max_iter=solve.max_iter,
-        got=got,
-        expected={"tol": solve.tol},
-        hint=(
-            f"Widen bounds (now {show(solve.bounds)}), increase max_iter (now "
-            f"{solve.max_iter}) or relax tol (now {solve.tol:g}). The largest miss is "
-            "|achieved - target| / (1 + |target|) over the controls."
-        ),
-    )
-
-
 #: Relative tolerance on X'w against the controls (absolute when a control is 0).
 FIT_TOL = 1e-4
 
@@ -673,7 +543,7 @@ def calibrate_matrix(
 ) -> Any:
     where = "Sample.weighting.calibrate_matrix"
     check_on_finding(on_nonconvergence, param="on_nonconvergence", where=where)
-    solve = _bounded_solve(bounds, tol, max_iter, trimming, where=where)
+    solve = bounded_solve(bounds, tol, max_iter, trimming, where=where, distance="linear")
     if controls is None:
         raise WeightingError.ValueError(
             title="No targets",
@@ -827,7 +697,7 @@ def calibrate_matrix(
     # A bounded solve is judged by its own stopping rule, before anything is written.
     bounded_err = None
     if solve is not None:
-        bounded_w, achieved, steps = _calibrate_bounded(
+        bounded_w, achieved, steps = solve_bounded(
             w.reshape(-1, 1),
             X,
             solve,
@@ -837,7 +707,15 @@ def calibrate_matrix(
             controls_by_domain=controls_dict_main,
         )
         new_w = bounded_w[:, 0]
-        bounded_err = _bounded_not_converged(solve, achieved, steps, where=where, domains=domains)
+        bounded_err = not_converged(
+            solve,
+            achieved,
+            steps,
+            where=where,
+            method="calibrate",
+            what="Bounded calibration",
+            domains=domains,
+        )
         if bounded_err is not None and on_nonconvergence == "error":
             raise bounded_err
 
@@ -1035,7 +913,7 @@ def calibrate_matrix(
             scale_arr = np.asarray(scale, dtype=np.float64)
 
         if solve is not None:
-            calib_reps, achieved_r, steps_r = _calibrate_bounded(
+            calib_reps, achieved_r, steps_r = solve_bounded(
                 wgts_arr,
                 X,
                 solve,
@@ -1044,11 +922,13 @@ def calibrate_matrix(
                 domain_indices=None if by_cols is None else domain_indices,
                 controls_by_domain=controls_dict_main,
             )
-            rep_bounded_err = _bounded_not_converged(
+            rep_bounded_err = not_converged(
                 solve,
                 achieved_r,
                 steps_r,
                 where=where,
+                method="calibrate",
+                what="Bounded calibration",
                 domains=domains,
                 replicates=[f"{wgt_name}{j + 1}" for j in range(len(rep_cols))],
             )
@@ -1162,19 +1042,8 @@ def calibrate_matrix(
         )
     for err in (bounded_err, rep_bounded_err):
         if err is not None:
-            sample.warn(
-                WeightingWarning(
-                    code=err.code,
-                    title=err.title,
-                    detail=err.detail.split(" The sample has NOT")[0]
-                    + f" {wgt_name!r} holds the last iterate.",
-                    where=where,
-                    level=finding_level(on_nonconvergence),
-                    param=err.param,
-                    expected=err.expected,
-                    got=err.got,
-                    hint=err.hint,
-                )
+            record_not_converged(
+                sample, err, where=where, wgt_name=wgt_name, on_nonconvergence=on_nonconvergence
             )
     if missed is not None:
         err = WeightingError.calibration_not_met(where=where, **missed)

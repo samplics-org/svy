@@ -400,15 +400,6 @@ def test_trim_cycles_not_converged():
     )
 
 
-def test_bounds_exceeded(s):
-    err = raises(
-        lambda: s.weighting.rake(controls={"sex": {"M": 50.0, "F": 30.0}}, bounds=(None, 1.2)),
-        "BOUNDS_EXCEEDED",
-    )
-    assert err.param == "bounds"
-    assert err.expected == {"bounds": [None, 1.2]}
-
-
 def test_calibration_not_met(s):
     X = np.column_stack([np.ones(8), np.ones(8)])
     raises(

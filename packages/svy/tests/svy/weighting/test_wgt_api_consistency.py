@@ -121,9 +121,10 @@ def test_rake_no_bounds_forms_agree(rk, bounds):
     ],
 )
 def test_rake_bounds_that_hold_change_nothing(rk, bounds):
-    # g is 50/40 = 1.25 in the North and 30/40 = 0.75 in the South
-    ref = rk.weighting.rake(controls=REGION)
-    out = rk.weighting.rake(controls=REGION, bounds=bounds)
+    # g is 50/40 = 1.25 in the North and 30/40 = 0.75 in the South. Both solved tightly, so the
+    # comparison is of the solutions, not of where IPF and the bounded solve stop.
+    ref = rk.weighting.rake(controls=REGION, tol=1e-12)
+    out = rk.weighting.rake(controls=REGION, bounds=bounds, tol=1e-12)
     np.testing.assert_allclose(out.data["rk_wgt"].to_numpy(), ref.data["rk_wgt"].to_numpy())
     g = _g(out, rk)
     lo, hi = bounds
@@ -133,20 +134,20 @@ def test_rake_bounds_that_hold_change_nothing(rk, bounds):
 
 @pytest.mark.parametrize("bounds", [(None, 1.2), (0.8, None), (0.8, 1.2), (1.3, 2.0)])
 @pytest.mark.parametrize("inplace", [False, True])
-def test_rake_violated_bounds_raise_and_leave_sample(rk, bounds, inplace):
+def test_rake_unreachable_bounds_raise_and_leave_sample(rk, bounds, inplace):
+    # The margins need g = 1.25 and 0.75, outside each of these bounds.
     data, design = rk.data, rk.design
     with pytest.raises(WeightingError) as ei:
         rk.weighting.rake(controls=REGION, bounds=bounds, inplace=inplace)
     err = ei.value
-    assert err.code == "BOUNDS_EXCEEDED"
-    assert err.param == "bounds"
-    assert err.expected == {"bounds": [bounds[0], bounds[1]]}
-    assert "checked after raking" in err.detail
+    assert err.code == "WEIGHTING_NOT_CONVERGED"
+    assert err.param == "max_iter"
+    assert "Bounded raking did not converge" in err.detail
     json.dumps(err.to_dict())
     assert rk.data.equals(data) and rk.design == design
 
 
-def test_rake_bounds_checked_on_replicates_too(rk):
+def test_rake_bounds_held_on_replicates_too(rk):
     from svy.core.repwgts import BootstrapWgts
 
     rng = np.random.default_rng(1)
@@ -159,7 +160,8 @@ def test_rake_bounds_checked_on_replicates_too(rk):
     s.weighting.rake(controls=REGION, bounds=(0.75, 1.25), ignore_reps=True)
     with pytest.raises(WeightingError) as ei:
         s.weighting.rake(controls=REGION, bounds=(0.75, 1.25))
-    assert ei.value.code == "BOUNDS_EXCEEDED"
+    assert ei.value.code == "WEIGHTING_NOT_CONVERGED"
+    assert ei.value.got["replicates"]
 
 
 @pytest.mark.parametrize(
@@ -673,9 +675,9 @@ def test_no_strict_left(name):
     assert params["on_nonconvergence"].default == "error"
 
 
-def test_rake_bounds_docstring_says_checked_not_enforced():
+def test_rake_bounds_docstring_says_held_during_the_solve():
     doc = _flat(Weighting.rake.__doc__)
-    assert "CHECKED after raking, not enforced" in doc
+    assert "held during the solve" in doc
     assert "g = new weight / old weight" in doc
 
 

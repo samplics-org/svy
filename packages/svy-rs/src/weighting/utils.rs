@@ -22,9 +22,6 @@ pub(crate) enum WeightingError {
     )]
     NoRespondents { class: i64, column: usize },
 
-    #[error("Raking exceeded weight bounds{}", if *.converged { "" } else { " (max_iter reached without convergence)" })]
-    BoundsExceeded { converged: bool },
-
     #[error("calibration scale must be finite and positive, got {value} at row {row}")]
     ScaleNotPositive { row: usize, value: f64 },
 
@@ -44,14 +41,13 @@ impl Coded for WeightingError {
             Self::DimensionMismatch { .. } => "SHAPE_MISMATCH",
             Self::ZeroWeights(_) => "ZERO_WEIGHT",
             Self::NoRespondents { .. } => "NO_RESPONDENTS",
-            Self::BoundsExceeded { .. } => "BOUNDS_EXCEEDED",
             Self::ScaleNotPositive { .. } => "INVALID_RANGE",
             Self::SvdNotConverged => KERNEL_INTERNAL,
         }
     }
 
     fn invalid_input(&self) -> bool {
-        !matches!(self, Self::BoundsExceeded { .. } | Self::SvdNotConverged)
+        !matches!(self, Self::SvdNotConverged)
     }
 }
 
@@ -71,38 +67,6 @@ pub(crate) fn sum_by_group_2d(
     }
 
     sums
-}
-
-/// True when every ratio raked / initial (initial > 0) lies within the bounds.
-pub(crate) fn check_bounds(
-    raked: ArrayView2<f64>,
-    initial: ArrayView2<f64>,
-    ll_bound: Option<f64>,
-    up_bound: Option<f64>,
-) -> bool {
-    if ll_bound.is_none() && up_bound.is_none() {
-        return true;
-    }
-
-    for (&raked_w, &init_w) in raked.iter().zip(initial.iter()) {
-        if init_w > 0.0 {
-            let ratio = raked_w / init_w;
-
-            if let Some(ll) = ll_bound
-                && ratio < ll
-            {
-                return false;
-            }
-
-            if let Some(up) = up_bound
-                && ratio > up
-            {
-                return false;
-            }
-        }
-    }
-
-    true
 }
 
 #[cfg(test)]

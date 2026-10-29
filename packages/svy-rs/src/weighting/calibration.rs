@@ -3,6 +3,7 @@
 use super::utils::{Result, WeightingError};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, s};
 use rayon::prelude::*;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 /// Solves (X' diag(w/s) X) λ = t - X'w per column and returns w * g, with g = 1 + Xλ / s.
@@ -222,6 +223,70 @@ pub(crate) struct BoundedFit {
     pub(crate) steps: usize,
 }
 
+/// The distance g is solved under: `g = clamp(1 + u)` (linear) or `clamp(exp(u))` (raking).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Distance {
+    Linear,
+    Raking,
+}
+
+impl Distance {
+    pub(crate) fn parse(name: &str) -> Result<Self> {
+        match name {
+            "linear" => Ok(Self::Linear),
+            "raking" => Ok(Self::Raking),
+            other => Err(WeightingError::InvalidInput(format!(
+                "unknown calibration distance '{other}'; expected 'linear' or 'raking'"
+            ))),
+        }
+    }
+
+    /// g held in `[lower, upper]`; NaN propagates as in R's pmin/pmax (f64::max drops it).
+    fn g(self, u: f64, lower: f64, upper: f64) -> f64 {
+        if u.is_nan() {
+            return f64::NAN;
+        }
+        let raw = match self {
+            Self::Linear => u + 1.0,
+            Self::Raking => u.exp(),
+        };
+        raw.max(lower).min(upper)
+    }
+
+    /// dg/du, zero where g sits at a bound so the row stops moving.
+    fn deriv(self, u: f64, lower: f64, upper: f64) -> f64 {
+        match self {
+            // Strict, as in R.
+            Self::Linear => {
+                if u < upper - 1.0 && u > lower - 1.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            // Zero exactly where g is clamped. R's cal.raking cuts at lower - 1 and upper - 1,
+            // which stalls problems whose bounds do not even bind.
+            Self::Raking => {
+                let e = u.exp();
+                if e > lower && e < upper { e } else { 0.0 }
+            }
+        }
+    }
+}
+
+/// Raking's Ψ, with Ψ' = clamp(exp(u)): the dual `t'η - Σ w s Ψ(Xη / s)` is concave and its
+/// gradient is the misfit, so a good step increases it.
+fn raking_dual(u: f64, lower: f64, upper: f64) -> f64 {
+    let (a, b) = (lower.ln(), upper.ln());
+    if u < a {
+        lower * (u - a) + lower
+    } else if u > b {
+        upper * (u - b) + upper
+    } else {
+        u.exp()
+    }
+}
+
 /// Bounds `[lower, upper]` on g = new / old weight, with the Newton loop's stopping rule.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BoundedSolve {
@@ -229,12 +294,13 @@ pub(crate) struct BoundedSolve {
     pub(crate) upper: f64,
     pub(crate) tol: f64,
     pub(crate) max_iter: usize,
+    pub(crate) distance: Distance,
 }
 
-/// Linear calibration with g held in `[lower, upper]`, per column: R survey's `grake` with
-/// `cal.linear`. Returns the weights and, per column, where the solve stopped; a column that
-/// did not converge holds the last iterate.
-pub(crate) fn calibrate_linear_bounded(
+/// Calibration with g held in `[lower, upper]`, per column: R survey's `grake`. Returns the
+/// weights and, per column, where the solve stopped; a column that did not converge holds the
+/// last iterate.
+pub(crate) fn calibrate_bounded(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     totals: ArrayView1<f64>,
@@ -275,7 +341,7 @@ pub(crate) fn calibrate_linear_bounded(
 
     let cols: std::result::Result<Vec<_>, WeightingError> = (0..n_reps)
         .into_par_iter()
-        .map(|r| grake_linear(wgt.column(r), x_matrix, totals, s.view(), solve))
+        .map(|r| grake(wgt.column(r), x_matrix, totals, s.view(), solve))
         .collect();
 
     let mut result = Array2::zeros((n_obs, n_reps));
@@ -287,8 +353,15 @@ pub(crate) fn calibrate_linear_bounded(
     Ok((result, fits))
 }
 
-/// One column of `calibrate_linear_bounded`, a literal port of `grake` so results match R.
-fn grake_linear(
+/// Regularization of the raking Jacobian, relative to its diagonal at g = 1: keeps a direction
+/// for rows held at a bound, which a pseudo-inverse would drop and so never move them back.
+const RAKING_DAMPING: f64 = 1e-6;
+
+/// One column of `calibrate_bounded`. Linear is a literal port of `grake`, so its iterates match
+/// R. Raking takes the full Newton step when it shrinks the misfit and otherwise backtracks on
+/// the dual, which converges where R's undamped step cycles; it reaches R's solution wherever
+/// R converges, since the solution is unique.
+fn grake(
     wgt: ArrayView1<f64>,
     x: ArrayView2<f64>,
     totals: ArrayView1<f64>,
@@ -300,24 +373,10 @@ fn grake_linear(
         upper,
         tol,
         max_iter,
+        distance,
     } = solve;
     let (n_obs, n_aux) = x.dim();
-    // NaN must propagate as in R's pmin/pmax (f64::max drops it), so step halving sees it.
-    let fm1 = |u: f64| {
-        if u.is_nan() {
-            f64::NAN
-        } else {
-            (u + 1.0).max(lower).min(upper) - 1.0
-        }
-    };
-    // Strict, as in R: a row at a bound drops out of the Jacobian and stops moving.
-    let deriv = |u: f64| {
-        if u < upper - 1.0 && u > lower - 1.0 {
-            1.0
-        } else {
-            0.0
-        }
-    };
+    let fm1 = |u: f64| distance.g(u, lower, upper) - 1.0;
 
     let mut w = wgt.to_owned();
     let mut sample_total = x.t().dot(&w);
@@ -350,13 +409,14 @@ fn grake_linear(
                 }
             })
     };
-
-    let mut eta: Array1<f64> = Array1::zeros(n_aux);
-    let mut u = x_eta(&eta);
-    let mut iter = 1usize;
-    let mut steps = 0usize;
-    let achieved = loop {
-        steps += 1;
+    let dual_of = |eta: &Array1<f64>| -> f64 {
+        let u = x_eta(eta);
+        totals.dot(eta)
+            - (0..n_obs)
+                .map(|i| w[i] * scale[i] * raking_dual(u[i], lower, upper))
+                .sum::<f64>()
+    };
+    let jacobian = |u: &Array1<f64>, deriv: &dyn Fn(f64) -> f64| -> Array2<f64> {
         let mut t_mat = Array2::zeros((n_aux, n_aux));
         for i in 0..n_obs {
             let c = w[i] * deriv(u[i]) / scale[i];
@@ -370,7 +430,53 @@ fn grake_linear(
                 }
             }
         }
-        let mut deta = solve_pseudoinverse(&t_mat, &misfit_of(&u))?;
+        t_mat
+    };
+    let damping = match distance {
+        Distance::Linear => None,
+        Distance::Raking => {
+            let full = jacobian(&Array1::zeros(n_obs), &|_| 1.0);
+            Some(Array1::from_shape_fn(n_aux, |j| {
+                let v = full[[j, j]];
+                RAKING_DAMPING * if v > 0.0 { v } else { 1.0 }
+            }))
+        }
+    };
+
+    let mut eta: Array1<f64> = Array1::zeros(n_aux);
+    let mut u = x_eta(&eta);
+    let mut iter = 1usize;
+    let mut steps = 0usize;
+    let achieved = loop {
+        steps += 1;
+        let misfit = misfit_of(&u);
+        let mut t_mat = jacobian(&u, &|v| distance.deriv(v, lower, upper));
+        let mut deta = match &damping {
+            None => solve_pseudoinverse(&t_mat, &misfit)?,
+            Some(d) => {
+                for j in 0..n_aux {
+                    t_mat[[j, j]] += d[j];
+                }
+                let mut step = solve_linear_system(&t_mat, &misfit)?;
+                // A NaN compares as neither, so it counts as no progress and keeps halving.
+                let after = achieved_of(&misfit_of(&x_eta(&(&eta + &step))));
+                if after.partial_cmp(&achieved_of(&misfit)) != Some(Ordering::Less) {
+                    // Armijo on the concave dual.
+                    let (f0, slope) = (dual_of(&eta), misfit.dot(&step));
+                    let mut s = 1.0;
+                    while s > 1e-12
+                        && !matches!(
+                            dual_of(&(&eta + &(&step * s))).partial_cmp(&(f0 + 1e-4 * s * slope)),
+                            Some(Ordering::Greater | Ordering::Equal)
+                        )
+                    {
+                        s /= 2.0;
+                    }
+                    step *= s;
+                }
+                step
+            }
+        };
         eta += &deta;
         u = x_eta(&eta);
         while iter < max_iter && u.iter().any(|v| !fm1(*v).is_finite()) {
@@ -397,7 +503,7 @@ fn grake_linear(
 /// Weights, the domains in ascending order, and each domain's fit per column.
 type BoundedByDomain = (Array2<f64>, Vec<i64>, Vec<Vec<BoundedFit>>);
 
-/// `calibrate_linear_bounded` separately within each domain, against that domain's totals.
+/// `calibrate_bounded` separately within each domain, against that domain's totals.
 pub(crate) fn calibrate_bounded_by_domain(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
@@ -452,7 +558,7 @@ pub(crate) fn calibrate_bounded_by_domain(
     let solved: std::result::Result<Vec<_>, WeightingError> = tasks
         .par_iter()
         .map(|&(d, start, end)| {
-            let (w, fits) = calibrate_linear_bounded(
+            let (w, fits) = calibrate_bounded(
                 wgt_sorted.slice(s![start..end, ..]),
                 x_sorted.slice(s![start..end, ..]),
                 controls[&d].view(),
@@ -691,7 +797,80 @@ mod tests {
             upper,
             tol: 1e-12,
             max_iter,
+            distance: Distance::Linear,
         }
+    }
+
+    fn raking(lower: f64, upper: f64, max_iter: usize) -> BoundedSolve {
+        BoundedSolve {
+            distance: Distance::Raking,
+            ..solve(lower, upper, max_iter)
+        }
+    }
+
+    #[test]
+    fn one_margin_raking_is_poststratification() {
+        // Levels {0, 1} with weighted totals 2 and 4 and targets 3 and 8: g = 1.5 and 2.
+        let wgt = array![[1.0], [1.0], [2.0], [2.0]];
+        let x = array![[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]];
+        let (w, fits) = calibrate_bounded(
+            wgt.view(),
+            x.view(),
+            array![3.0, 8.0].view(),
+            None,
+            raking(0.5, 3.0, 50),
+        )
+        .unwrap();
+        // The solve stops once each miss is below tol * (1 + target) = 9e-12.
+        for (got, want) in w.iter().zip([1.5, 1.5, 4.0, 4.0]) {
+            assert_abs_diff_eq!(*got, want, epsilon = 9e-12);
+        }
+        assert!(fits[0].achieved < 1e-12);
+    }
+
+    #[test]
+    fn raking_out_of_reach_holds_the_bound_and_reports_the_miss() {
+        // Level 1 needs g = 2 but stops at 1.8: 7.2 of 8, a miss of 0.8 / (1 + 8).
+        let wgt = array![[1.0], [1.0], [2.0], [2.0]];
+        let x = array![[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]];
+        let (w, fits) = calibrate_bounded(
+            wgt.view(),
+            x.view(),
+            array![3.0, 8.0].view(),
+            None,
+            raking(0.5, 1.8, 20),
+        )
+        .unwrap();
+        for (got, want) in w.iter().zip([1.5, 1.5, 3.6, 3.6]) {
+            assert_abs_diff_eq!(*got, want, epsilon = 1e-10);
+        }
+        assert_eq!(fits[0].steps, 20);
+        assert_abs_diff_eq!(fits[0].achieved, 0.8 / 9.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn raking_bounds_that_do_not_bind_converge() {
+        // g = 1.618 / 2 = 0.809 lies inside (0.8, 1.2), but log(0.809) < 0.8 - 1: R's cal.raking
+        // zeroes the derivative there and never reaches it.
+        let wgt = array![[1.0], [1.0]];
+        let x = array![[1.0], [1.0]];
+        let (w, fits) = calibrate_bounded(
+            wgt.view(),
+            x.view(),
+            array![1.618].view(),
+            None,
+            raking(0.8, 1.2, 50),
+        )
+        .unwrap();
+        assert_abs_diff_eq!(w[[0, 0]], 0.809, epsilon = 1e-12);
+        assert_abs_diff_eq!(w[[1, 0]], 0.809, epsilon = 1e-12);
+        assert!(fits[0].achieved < 1e-12);
+    }
+
+    #[test]
+    fn unknown_distance_is_refused() {
+        let err = Distance::parse("logit").unwrap_err();
+        assert!(err.to_string().contains("'logit'"), "{err}");
     }
 
     #[test]
@@ -700,7 +879,7 @@ mod tests {
         let x = array![[1.0, 1.0], [1.0, 2.0], [1.0, 3.0], [1.0, 4.0]];
         let totals = array![7.0, 18.0];
         let open = calibrate_linear(wgt.view(), x.view(), totals.view(), None, false).unwrap();
-        let (bounded, fits) = calibrate_linear_bounded(
+        let (bounded, fits) = calibrate_bounded(
             wgt.view(),
             x.view(),
             totals.view(),
@@ -720,7 +899,7 @@ mod tests {
         // 1.6, rows 1-3 solve 6 + 14λ = 15 - 6.4, so λ = 2.6/14.
         let wgt = array![[1.0], [1.0], [1.0], [1.0]];
         let x = array![[1.0], [2.0], [3.0], [4.0]];
-        let (w, fits) = calibrate_linear_bounded(
+        let (w, fits) = calibrate_bounded(
             wgt.view(),
             x.view(),
             array![15.0].view(),
@@ -742,7 +921,7 @@ mod tests {
         // At most 1.4 * (1 + 2 + 3 + 4) = 14 < 15: every row ends at the bound, missing by 1/16.
         let wgt = array![[1.0], [1.0], [1.0], [1.0]];
         let x = array![[1.0], [2.0], [3.0], [4.0]];
-        let (w, fits) = calibrate_linear_bounded(
+        let (w, fits) = calibrate_bounded(
             wgt.view(),
             x.view(),
             array![15.0].view(),
@@ -760,7 +939,7 @@ mod tests {
         // Totals 50x the weighted sums: R rescales by 50 first, so g = 1 fits within (0.9, 1.1).
         let wgt = array![[1.0], [1.0]];
         let x = array![[1.0], [1.0]];
-        let (w, fits) = calibrate_linear_bounded(
+        let (w, fits) = calibrate_bounded(
             wgt.view(),
             x.view(),
             array![100.0].view(),
@@ -813,7 +992,7 @@ mod tests {
     fn bounded_bad_dims_are_errors() {
         let wgt = array![[1.0], [1.0], [1.0]];
         let x = array![[1.0], [2.0], [3.0]];
-        let res = calibrate_linear_bounded(
+        let res = calibrate_bounded(
             wgt.view(),
             x.view(),
             array![10.0, 20.0].view(),
@@ -830,7 +1009,7 @@ mod tests {
             ),
             "got {res:?}"
         );
-        let res = calibrate_linear_bounded(
+        let res = calibrate_bounded(
             wgt.view(),
             x.view(),
             array![10.0].view(),

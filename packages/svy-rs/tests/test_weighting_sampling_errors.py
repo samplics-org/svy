@@ -135,17 +135,6 @@ def test_unpaired_jackknife_needs_no_seed():
     assert reps.shape == (6, 6)
 
 
-@pytest.mark.parametrize("max_iter", [1, 100])
-def test_raking_beyond_bounds_is_a_coded_runtime_error(max_iter):
-    margin = np.array([0, 0, 0, 1, 1, 1], dtype=np.int64)
-    with pytest.raises(ps.KernelRuntimeError) as info:
-        ps.rake(
-            WGT[:, None], [margin], [np.array([1.0, 11.0])], 0.5, 1.5, 1e-6, max_iter
-        )
-    assert info.value.code == "BOUNDS_EXCEEDED"
-    assert str(info.value).startswith("Raking exceeded weight bounds")
-
-
 SWEEP_INPUT = [
     (
         {"calib_kind": "trimming", "calib_prev_wgt": "w0"},
