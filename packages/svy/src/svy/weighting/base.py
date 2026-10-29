@@ -843,7 +843,10 @@ class Weighting:
 
         Iterative proportional fitting: each margin is fitted in turn until all
         hold simultaneously. Takes no ``cells`` -- the margins ARE the
-        ``controls`` keys, one entry per margin column.
+        ``controls`` keys, one entry per margin column. With ``bounds`` it is
+        the same raking solution with g held in the bounds, found by Newton
+        steps on the margins' indicator matrix (R's
+        ``calibrate(calfun="raking", bounds=)``).
 
         Parameters
         ----------
@@ -866,30 +869,32 @@ class Weighting:
             them.
         bounds : tuple[float | None, float | None] | None
             Bounds ``(lo, hi)`` on the adjustment factor g = new weight / old
-            weight. None on a side leaves it open; None sets no bounds. The
-            bounds are CHECKED after raking, not enforced: raking runs
-            unconstrained, and if any row's g falls outside them (main weight
-            or replicates) the call raises ``BOUNDS_EXCEEDED`` and the sample
-            is left as it was. With ``trimming=`` each raking pass is checked
-            against the weights it started from. To limit the weights
-            themselves, use ``trimming=``.
+            weight, held during the solve, in the main and every replicate
+            weight. None on a side leaves it open; None, or no side set, keeps
+            IPF. Margins no g within the bounds can meet stop at ``max_iter``
+            (``WEIGHTING_NOT_CONVERGED``). Recorded for variance as R records
+            it, a GREG calibration on the indicator matrix. Cannot be combined
+            with ``trimming=``, which limits the weights themselves.
         tol : float
             Convergence tolerance: the largest relative misfit
-            ``|achieved - target| / target`` accepted over every margin level.
-            With ``trimming=`` it is also the relative slack allowed on the
+            ``|achieved - target| / target`` accepted over every margin level
+            (``|achieved - target| / (1 + |target|)`` with ``bounds``). With
+            ``trimming=`` it is also the relative slack allowed on the
             trimming bounds.
         max_iter : int
-            Iteration cap on the IPF sweeps of each raking pass. With
-            ``trimming=`` the trim-rake cycles are capped by
-            ``trimming.max_iter``, as in ``poststratify`` and ``calibrate``.
+            Iteration cap on the IPF sweeps of each raking pass, or on the
+            Newton steps with ``bounds``. With ``trimming=`` the trim-rake
+            cycles are capped by ``trimming.max_iter``, as in ``poststratify``
+            and ``calibrate``.
         display_iter : bool
             Print the final margin error (and each trim-rake cycle) to stdout.
         update_design_wgts : bool
             Point ``design.wgt`` and the replicate weights at the new columns
             and record the adjustment. False only adds the columns.
         on_nonconvergence : {"error", "warn", "ignore"}
-            What to do when raking does not converge within ``max_iter`` (or
-            the trim-rake cycle within ``trimming.max_iter``); with "warn" or
+            What to do when raking does not converge within ``max_iter`` in the
+            main or, with ``bounds``, a replicate weight (or the trim-rake cycle
+            within ``trimming.max_iter``); with "warn" or
             "ignore" the last iterate is kept. "error" raises and leaves the sample as it was; "warn"
             records the finding in ``sample.warnings`` and raises it once as a
             ``SvyWarning``; "ignore" records it at INFO level without

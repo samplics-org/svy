@@ -163,7 +163,6 @@ class Code(StrEnum):
     # ── Weighting ─────────────────────────────────────────────────────────────
     AUX_NA = "AUX_NA"
     AUX_TERMS_EMPTY = "AUX_TERMS_EMPTY"
-    BOUNDS_EXCEEDED = "BOUNDS_EXCEEDED"
     BY_NA = "BY_NA"
     CALIBRATION_NOT_MET = "CALIBRATION_NOT_MET"
     CELLS_BY_OVERLAP = "CELLS_BY_OVERLAP"

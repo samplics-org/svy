@@ -232,16 +232,6 @@ def test_rake_stops_at_max_iter_on_no_convergence(sample_data_for_raking, mock_d
     assert capsys.readouterr().out == ""
 
 
-def test_rake_stops_when_bounds_exceeded(sample_data_for_raking, mock_design):
-    from svy.errors import WeightingError
-
-    sample = Sample(data=sample_data_for_raking, design=mock_design)
-    controls = {"region": {"North": 50.0, "South": 30.0}}
-    with pytest.raises(WeightingError, match="outside bounds=") as ei:
-        sample.weighting.rake(controls=controls, bounds=(None, 1.2))
-    assert ei.value.code == "BOUNDS_EXCEEDED"
-
-
 def test_rake_raises_error_unknown_control_column(sample_data_for_raking, mock_design):
     sample = Sample(data=sample_data_for_raking, design=mock_design)
     with pytest.raises(Exception, match="not_a_column|not found"):

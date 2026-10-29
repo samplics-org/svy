@@ -29,12 +29,19 @@ from svy.core.design import WgtAdjustment
 from svy.core.types import Category, ControlsType
 from svy.errors import WeightingError
 from svy.errors._findings import check_on_finding, finding_level
+from svy.weighting._bounded import (
+    BoundedSolve,
+    bounded_solve,
+    not_converged,
+    record_not_converged,
+    solve_bounded,
+)
 from svy.weighting._engine import (
+    AUX_PREFIX,
     CELLS_PREFIX,
     _where_mask,
     control_name,
     record_trim_cycle,
-    resolve_bounds,
     unit_bounds,
     unreachable_cells,
 )
@@ -57,19 +64,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Helpers (previously in engine)
 # ---------------------------------------------------------------------------
-
-
-def _rake_or_raise(*args, where: str = "Sample.weighting.rake"):
-    """Call the Rust raking kernel, translating bounds violations into a
-    typed svy error. Bounds violations are errors on every exit path,
-    converged or not."""
-    assert rust_rake is not None  # noqa: S101
-    try:
-        return rust_rake(*args)
-    except RuntimeError as e:
-        if getattr(e, "code", None) == Code.BOUNDS_EXCEEDED:
-            raise WeightingError.bounds_exceeded(where=where, bounds=(args[3], args[4])) from None
-        raise
 
 
 def _normalize_controls_like(x: ControlsType | None) -> ControlsType | None:
@@ -192,6 +186,140 @@ def _converged(
     return _max_margin_error(w, margin_indices, margin_targets) <= tol
 
 
+def _margin_matrix(
+    margin_indices: list[np.ndarray], margin_targets: list[np.ndarray]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Intercept plus each margin's levels after the first, with their totals: R's
+    ``model.matrix(~a + b)``. All levels would repeat the grand total once per margin."""
+    n = len(margin_indices[0])
+    cols = [np.ones(n)]
+    totals = [float(margin_targets[0].sum())]
+    for codes, targets in zip(margin_indices, margin_targets):
+        for level in range(1, len(targets)):
+            cols.append((codes == level).astype(np.float64))
+            totals.append(float(targets[level]))
+    return np.column_stack(cols), np.asarray(totals)
+
+
+def _share_contrasts(
+    margin_indices: list[np.ndarray], margin_targets: list[np.ndarray]
+) -> np.ndarray:
+    """Each margin's levels after the first, less their share: what ``shares`` pin. The grand
+    total stays free, as ``poststratify(shares=)`` leaves it."""
+    cols = []
+    for codes, targets in zip(margin_indices, margin_targets):
+        share = targets / targets.sum()
+        for level in range(1, len(targets)):
+            cols.append((codes == level).astype(np.float64) - share[level])
+    return np.column_stack(cols)
+
+
+def _rake_bounded(
+    sample: Sample,
+    solve: BoundedSolve,
+    *,
+    w0: np.ndarray,
+    scope_idx: np.ndarray | None,
+    margin_indices: list[np.ndarray],
+    margin_targets: list[np.ndarray],
+    pins_total: bool,
+    wgt_name: str,
+    ignore_reps: bool,
+    update_design_wgts: bool,
+    on_nonconvergence: str,
+    display_iter: bool,
+) -> Sample:
+    """Raking with g held in ``solve``'s bounds: the raking distance on the margins' indicator
+    matrix, as R's ``calibrate(calfun="raking", bounds=)``, recorded as that calibration."""
+    ctx = "Sample.weighting.rake"
+    df = sample._data
+    design = sample._design
+    wgt = design.wgt
+    assert wgt is not None  # noqa: S101
+    X, totals = _margin_matrix(margin_indices, margin_targets)
+    ones = np.ones(len(w0))
+
+    def _in_scope(arr: np.ndarray) -> np.ndarray:
+        return arr if scope_idx is None else np.ascontiguousarray(arr[scope_idx])
+
+    def _full(scoped: np.ndarray, before: np.ndarray) -> np.ndarray:
+        if scope_idx is None:
+            return scoped
+        full = before.copy()
+        full[scope_idx] = scoped
+        return full
+
+    raked, achieved, steps = solve_bounded(w0.reshape(-1, 1), X, solve, scale=ones, totals=totals)
+    err = not_converged(solve, achieved, steps, where=ctx, method="rake", what="Bounded raking")
+    if display_iter:
+        status = "converged" if err is None else "not converged"
+        print(f"  Bounded raking: {int(steps[0, 0])} steps  [{status}]")
+    if err is not None and on_nonconvergence == "error":
+        raise err
+
+    rep_cols = (
+        design.rep_wgts.columns
+        if not ignore_reps and design.rep_wgts is not None and design.rep_wgts.columns
+        else []
+    )
+    rep_err = None
+    raked_reps = None
+    if rep_cols:
+        before = df.select(rep_cols).to_numpy().astype(np.float64)
+        out, achieved_r, steps_r = solve_bounded(
+            _in_scope(before), X, solve, scale=ones, totals=totals
+        )
+        rep_err = not_converged(
+            solve,
+            achieved_r,
+            steps_r,
+            where=ctx,
+            method="rake",
+            what="Bounded raking",
+            replicates=[f"{wgt_name}{j + 1}" for j in range(len(rep_cols))],
+        )
+        if rep_err is not None and on_nonconvergence == "error":
+            raise rep_err
+        raked_reps = _full(out, before)
+
+    # Only now, with nothing left to raise, is the sample written.
+    new_w = _full(raked[:, 0], df.get_column(wgt).to_numpy().astype(np.float64))
+    df = df.with_columns(pl.Series(name=wgt_name, values=new_w))
+    if update_design_wgts:
+        aux = X if pins_total else _share_contrasts(margin_indices, margin_targets)
+        aux_cols = [f"{AUX_PREFIX}{wgt_name}_{j}" for j in range(aux.shape[1])]
+        df = df.with_columns(
+            [
+                pl.Series(name=c, values=_full(aux[:, j], np.zeros(df.height)))
+                for j, c in enumerate(aux_cols)
+            ]
+        )
+        sample._push_design()
+        sample._design = sample._design.update(
+            wgt=wgt_name,
+            rep_wgts=None if ignore_reps else sample._design.rep_wgts,
+            wgt_adjustment=WgtAdjustment(
+                kind="calibration", prev_wgt=wgt, new_wgt=wgt_name, aux=tuple(aux_cols)
+            ),
+        )
+    if raked_reps is not None and design.rep_wgts is not None:
+        names = [f"{wgt_name}{j}" for j in range(1, len(rep_cols) + 1)]
+        df = df.hstack(pl.DataFrame(raked_reps, schema=names))
+        if update_design_wgts:
+            sample._design = sample._design.update(
+                rep_wgts=msgspec.structs.replace(
+                    design.rep_wgts, prefix=wgt_name, n_reps=len(rep_cols)
+                )
+            )
+    sample._data = df
+    for e in (err, rep_err):
+        if e is not None:
+            record_not_converged(
+                sample, e, where=ctx, wgt_name=wgt_name, on_nonconvergence=on_nonconvergence
+            )
+    return sample
+
+
 def rake(
     sample: Sample,
     *,
@@ -213,7 +341,7 @@ def rake(
     design = sample._design
 
     check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
-    ll_bound, up_bound = resolve_bounds(bounds, where=ctx)
+    solve = bounded_solve(bounds, tol, max_iter, trimming, where=ctx, distance="raking")
 
     if design.wgt is None:
         raise WeightingError.no_weight(where=ctx, method="rake")
@@ -335,6 +463,22 @@ def rake(
             {c: float(v.sum()) for c, v in zip(rake_cols, margin_targets)}, where=ctx
         )
 
+    if solve is not None:
+        return _rake_bounded(
+            sample,
+            solve,
+            w0=w0,
+            scope_idx=scope_idx,
+            margin_indices=margin_indices,
+            margin_targets=margin_targets,
+            pins_total=controls_norm is not None,
+            wgt_name=wgt_name,
+            ignore_reps=ignore_reps,
+            update_design_wgts=update_design_wgts,
+            on_nonconvergence=on_nonconvergence,
+            display_iter=display_iter,
+        )
+
     assert rust_rake is not None  # noqa: S101
 
     # ── Trim-rake cycle ───────────────────────────────────────────────────
@@ -347,12 +491,10 @@ def rake(
     # main-weight result.
 
     def _rake(w_in: np.ndarray) -> np.ndarray:
-        return _rake_or_raise(
+        return rust_rake(
             w_in.reshape(-1, 1),
             margin_indices,
             margin_targets,
-            ll_bound,
-            up_bound,
             tol,
             max_iter,
         )[:, 0]
@@ -518,17 +660,13 @@ def rake(
             # Replicates: one rake pass with the final converged main weights
             # as starting point. Cycling replicates is not standard practice.
             if scope_idx is None:
-                raked_reps = _rake_or_raise(
-                    wgts_arr, margin_indices, margin_targets, ll_bound, up_bound, tol, max_iter
-                )
+                raked_reps = rust_rake(wgts_arr, margin_indices, margin_targets, tol, max_iter)
             else:
                 raked_reps = wgts_arr.copy()
-                raked_reps[scope_idx] = _rake_or_raise(
+                raked_reps[scope_idx] = rust_rake(
                     np.ascontiguousarray(wgts_arr[scope_idx]),
                     margin_indices,
                     margin_targets,
-                    ll_bound,
-                    up_bound,
                     tol,
                     max_iter,
                 )

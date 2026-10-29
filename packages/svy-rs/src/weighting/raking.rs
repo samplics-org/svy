@@ -1,6 +1,6 @@
 //! Raking by iterative proportional fitting.
 
-use super::utils::{Result, WeightingError, check_bounds, sum_by_group_2d};
+use super::utils::{Result, WeightingError, sum_by_group_2d};
 use ndarray::{Array1, Array2, ArrayView2};
 
 struct MarginSpec {
@@ -21,13 +21,11 @@ impl MarginSpec {
     }
 }
 
-/// Raking where non-convergence returns the last weights but a bound violation is an error.
+/// Iterative proportional fitting; non-convergence returns the last weights.
 pub(crate) fn rake_impl(
     wgt: ArrayView2<f64>,
     margin_indices: &[Array1<i64>],
     margin_targets: &[Array1<f64>],
-    ll_bound: Option<f64>,
-    up_bound: Option<f64>,
     tol: f64,
     max_iter: usize,
 ) -> Result<Array2<f64>> {
@@ -78,7 +76,6 @@ pub(crate) fn rake_impl(
 
     let mut raked_weights = wgt.to_owned();
 
-    let mut converged = false;
     for _ in 0..max_iter {
         // Tracked inline so the N×R matrix is not cloned every iteration.
         let mut max_rel_diff = 0.0f64;
@@ -117,15 +114,10 @@ pub(crate) fn rake_impl(
         }
 
         if max_rel_diff < tol {
-            converged = true;
             break;
         }
     }
 
-    // Bounds hold on both exit paths, converged or not.
-    if !check_bounds(raked_weights.view(), wgt, ll_bound, up_bound) {
-        return Err(WeightingError::BoundsExceeded { converged });
-    }
     Ok(raked_weights)
 }
 
@@ -140,7 +132,7 @@ mod tests {
         let wgt = array![[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]];
         let indices = array![0, 0, 1, 1];
         let targets = array![6.0, 2.0];
-        let result = rake_impl(wgt.view(), &[indices], &[targets], None, None, 1e-6, 100).unwrap();
+        let result = rake_impl(wgt.view(), &[indices], &[targets], 1e-6, 100).unwrap();
         // Column 0 is split 6 / 2 across the two categories.
         assert_eq!(result.column(0).to_vec(), [3.0, 3.0, 1.0, 1.0]);
         assert_relative_eq!(result[[0, 1]] + result[[1, 1]], 6.0, epsilon = 1e-12);
@@ -154,8 +146,6 @@ mod tests {
             wgt.view(),
             &[array![0, 0, 1, 1], array![0, 1, 0, 1]],
             &[array![10.0, 20.0], array![12.0, 18.0]],
-            None,
-            None,
             1e-6,
             100,
         )
@@ -174,8 +164,6 @@ mod tests {
             wgt.view(),
             &[array![0, 0, 1, 1]],
             &[array![6.0, 2.0]],
-            None,
-            None,
             1e-20,
             1,
         );
@@ -185,15 +173,7 @@ mod tests {
     #[test]
     fn test_negative_margin_index_is_error() {
         let wgt = array![[1.0], [1.0]];
-        let result = rake_impl(
-            wgt.view(),
-            &[array![-1, 0]],
-            &[array![6.0]],
-            None,
-            None,
-            1e-6,
-            100,
-        );
+        let result = rake_impl(wgt.view(), &[array![-1, 0]], &[array![6.0]], 1e-6, 100);
         assert!(
             matches!(&result, Err(WeightingError::InvalidInput(m)) if m.contains("must be non-negative")),
             "got {result:?}"
@@ -203,15 +183,7 @@ mod tests {
     #[test]
     fn test_short_margin_targets_is_error() {
         let wgt = array![[1.0], [1.0], [1.0]];
-        let result = rake_impl(
-            wgt.view(),
-            &[array![0, 1, 2]],
-            &[array![6.0]],
-            None,
-            None,
-            1e-6,
-            100,
-        );
+        let result = rake_impl(wgt.view(), &[array![0, 1, 2]], &[array![6.0]], 1e-6, 100);
         assert!(
             matches!(
                 &result,
@@ -219,27 +191,6 @@ mod tests {
                     expected: 3,
                     got: 1
                 })
-            ),
-            "got {result:?}"
-        );
-    }
-
-    #[test]
-    fn test_bounds_exceeded_is_error() {
-        let wgt = array![[1.0], [1.0], [1.0], [1.0]];
-        let result = rake_impl(
-            wgt.view(),
-            &[array![0, 0, 1, 1]],
-            &[array![6.0, 2.0]],
-            None,
-            Some(1.1),
-            1e-6,
-            100,
-        );
-        assert!(
-            matches!(
-                &result,
-                Err(WeightingError::BoundsExceeded { converged: true })
             ),
             "got {result:?}"
         );

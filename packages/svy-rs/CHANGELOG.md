@@ -6,6 +6,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Added
 
+- **BREAKING: `rake` no longer takes `ll_bound`/`up_bound`**, and the `BOUNDS_EXCEEDED` error is gone; svy holds raking bounds through `calibrate_bounded(distance="raking")` instead of checking them after IPF.
+- `calibrate_bounded` and `calibrate_bounded_by_domain` take `distance="raking"`: g = clamp(exp(u)), with the derivative zero exactly where g is clamped (R's `cal.raking` cuts at `lower - 1`, `upper - 1` and stalls feasible problems), a small Levenberg–Marquardt term so rows held at a bound can move back, and a backtracking search on the dual when the full Newton step does not shrink the misfit.
 - `calibrate_bounded` and `calibrate_bounded_by_domain`: linear calibration with g held in `[lower, upper]`, a port of R survey's `grake` with `cal.linear` (Newton steps on `MASS::ginv`, R's stopping rule and pre-scaling). Each returns the weights and, per column (and domain), the largest `|misfit| / (1 + |t|)` and the Newton steps taken; a column that did not converge holds the last iterate.
 
 ## [0.20.0] — 2026-10-28

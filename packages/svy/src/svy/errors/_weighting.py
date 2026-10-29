@@ -509,24 +509,6 @@ class WeightingError(SvyError):
         )
 
     @classmethod
-    def bounds_exceeded(
-        cls, *, where: Optional[str], bounds: tuple[float | None, float | None]
-    ) -> "WeightingError":
-        return cls.ValueError(
-            title="Adjustment factor out of bounds",
-            detail=(
-                f"The raked weights leave the factor g = new/old weight outside "
-                f"bounds={show(tuple(bounds))}. Bounds are checked after raking, "
-                "not enforced during it."
-            ),
-            code=Code.BOUNDS_EXCEEDED,
-            where=where,
-            param="bounds",
-            expected={"bounds": list(bounds)},
-            hint="Widen the bounds, relax the margins, or collapse sparse levels.",
-        )
-
-    @classmethod
     def bounds_invalid(
         cls, *, where: Optional[str], got: Any, reason: str, as_type: bool = False
     ) -> "WeightingError":
