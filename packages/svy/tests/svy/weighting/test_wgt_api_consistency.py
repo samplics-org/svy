@@ -198,7 +198,7 @@ def test_rake_bounds_lo_above_hi_names_both(rk):
 
 
 # ---------------------------------------------------------------------------
-# calibrate(bounds=) / calibrate_matrix(bounds=): validated, then refused
+# calibrate(bounds=) / calibrate_matrix(bounds=): validated, then held during the solve
 # ---------------------------------------------------------------------------
 
 
@@ -223,30 +223,26 @@ def test_calibrate_unset_bounds_run(cal, name, bounds):
 @pytest.mark.parametrize("name", list(CAL_CALLS))
 @pytest.mark.parametrize("bounds", [(0.5, 2.0), (0.5, None), (None, 2.0), [0.3, 2.3]])
 @pytest.mark.parametrize("inplace", [False, True])
-def test_calibrate_bounds_not_supported_yet(cal, name, bounds, inplace):
+def test_calibrate_bounds_hold_and_controls_are_met(cal, name, bounds, inplace):
     data, design = cal.data, cal.design
-    with pytest.raises(WeightingError) as ei:
-        CAL_CALLS[name](cal, bounds=bounds, inplace=inplace)
-    err = ei.value
-    assert isinstance(err, NotImplementedError)
-    assert err.code == "NOT_SUPPORTED" and err.param == "bounds"
-    assert "trimming=" in err.hint
-    json.dumps(err.to_dict())
-    assert cal.data.equals(data) and cal.design == design
+    out = CAL_CALLS[name](cal, bounds=bounds, inplace=inplace)
+    target = cal if inplace else out
+    w, w0 = target.data["calib_wgt"].to_numpy(), target.data["w"].to_numpy()
+    lo, hi = bounds
+    g = w / w0
+    assert (lo is None or g.min() >= lo - 1e-12) and (hi is None or g.max() <= hi + 1e-12)
+    x_total = float(np.sum(w * target.data["x"].to_numpy()))
+    assert abs(x_total - 70.0) / 71.0 < 1e-7  # the default tol, on |miss| / (1 + |target|)
+    if not inplace:
+        assert cal.data.equals(data) and cal.design == design
 
 
 @pytest.mark.parametrize("name", list(CAL_CALLS))
 @pytest.mark.parametrize("bounds", [1.0, (1.0,), (2.0, 1.0), ("a", None)])
-def test_calibrate_bad_bounds_validated_before_refusal(cal, name, bounds):
+def test_calibrate_bad_bounds_are_refused(cal, name, bounds):
     with pytest.raises(WeightingError) as ei:
         CAL_CALLS[name](cal, bounds=bounds)
     assert ei.value.code in ("INVALID_TYPE", "INVALID_RANGE")
-
-
-def test_calibrate_where_bounds_refused(cal):
-    with pytest.raises(WeightingError) as ei:
-        cal.weighting.calibrate(controls={"x": 30.0}, where=col("d") == "d1", bounds=(0.5, 2))
-    assert ei.value.code == "NOT_SUPPORTED"
 
 
 def test_calibrate_matrix_controls_required(cal):
@@ -297,7 +293,7 @@ def test_rake_old_bounds_refused(rk, kwargs, old, shown):
 def test_calibrate_bounded_refused(cal, name, value):
     err = _renamed(lambda: CAL_CALLS[name](cal, bounded=value))
     assert err.param == "bounded" and err.expected == "bounds"
-    assert "not supported yet" in err.hint
+    assert "bounds=(0.5, 2.0)" in err.hint
 
 
 def test_calibrate_matrix_control_refused(cal):

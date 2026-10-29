@@ -27,6 +27,8 @@ to Python callers.
 
 from __future__ import annotations
 
+import math
+
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import msgspec
@@ -39,6 +41,12 @@ from svy.errors import Code, WeightingWarning
 try:
     from svy_rs._internal import calibrate as rust_calibrate  # type: ignore[import-untyped]
     from svy_rs._internal import (
+        calibrate_bounded as rust_calibrate_bounded,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
+        calibrate_bounded_by_domain as rust_calibrate_bounded_by_domain,  # type: ignore[import-untyped]
+    )
+    from svy_rs._internal import (
         calibrate_by_domain as rust_calibrate_by_domain,  # type: ignore[import-untyped]
     )
     from svy_rs._internal import (
@@ -46,6 +54,8 @@ try:
     )
 except ImportError:  # pragma: no cover
     rust_calibrate = None
+    rust_calibrate_bounded = None
+    rust_calibrate_bounded_by_domain = None
     rust_calibrate_by_domain = None
     rust_calibrate_parallel = None
 
@@ -54,7 +64,7 @@ from svy.core.terms import Cat, Cross, Feature
 from svy.core.types import Category, Number
 from svy.errors import WeightingError
 from svy.errors._findings import Severity, check_on_finding, finding_level
-from svy.errors._weighting import show
+from svy.errors._weighting import show, show_list
 from svy.weighting._calibration_utils import _expand_term, _match_term_targets
 from svy.weighting._engine import (
     AUX_PREFIX,
@@ -237,6 +247,8 @@ def calibrate(
     where: WhereArg = None,
     scale: Number | list[Number] | np.ndarray = 1.0,
     bounds: tuple[float | None, float | None] | None = None,
+    tol: float = 1e-7,
+    max_iter: int = 50,
     wgt_name: str = "calib_wgt",
     update_design_wgts: bool = True,
     ignore_reps: bool = False,
@@ -245,7 +257,7 @@ def calibrate(
 ) -> Sample:
     ctx = "Sample.weighting.calibrate"
     check_on_finding(on_nonconvergence, param="on_nonconvergence", where=ctx)
-    _refuse_bounds(bounds, where=ctx)
+    _bounded_solve(bounds, tol, max_iter, trimming, where=ctx)
 
     scope = _where_mask(sample._data, where, where=ctx)
     if scope is not None:
@@ -255,6 +267,9 @@ def calibrate(
             controls=controls,
             by=by,
             scale=scale,
+            bounds=bounds,
+            tol=tol,
+            max_iter=max_iter,
             wgt_name=wgt_name,
             update_design_wgts=update_design_wgts,
             ignore_reps=ignore_reps,
@@ -370,6 +385,9 @@ def calibrate(
         controls=final_control_arg,
         by=by,
         scale=scale,
+        bounds=bounds,
+        tol=tol,
+        max_iter=max_iter,
         wgt_name=wgt_name,
         update_design_wgts=update_design_wgts,
         labels=None,
@@ -391,19 +409,127 @@ def _control_display(term: Feature, label: Category) -> str:
     return str(term)
 
 
-def _refuse_bounds(bounds: Any, *, where: str) -> None:
-    """Validate ``bounds`` and refuse any side that is set: bounded calibration
-    is not implemented, and accepting the option would ignore it."""
+class _BoundedSolve(msgspec.Struct, frozen=True):
+    lower: float  # -inf when open
+    upper: float  # inf when open
+    tol: float
+    max_iter: int
+    bounds: tuple[float | None, float | None]  # as given, for messages
+
+
+def _bounded_solve(
+    bounds: Any, tol: Any, max_iter: Any, trimming: TrimConfig | None, *, where: str
+) -> _BoundedSolve | None:
+    """Validate ``bounds``, ``tol`` and ``max_iter``; None when no side of ``bounds`` is set,
+    which keeps the closed-form solve, as R does for ``bounds=c(-Inf, Inf)``."""
     lo, hi = resolve_bounds(bounds, where=where)
+    if isinstance(tol, bool) or not isinstance(tol, (int, float)):
+        raise WeightingError.invalid_type(
+            where=where, param="tol", got=tol, expected="a positive number"
+        )
+    if not (math.isfinite(tol) and tol > 0):
+        raise WeightingError.invalid_range(
+            where=where,
+            param="tol",
+            got=tol,
+            detail="Parameter 'tol' must be finite and greater than 0.",
+        )
+    if isinstance(max_iter, bool) or not isinstance(max_iter, int):
+        raise WeightingError.invalid_type(
+            where=where, param="max_iter", got=max_iter, expected="an integer >= 1"
+        )
+    if max_iter < 1:
+        raise WeightingError.invalid_range(
+            where=where,
+            param="max_iter",
+            got=max_iter,
+            detail="Parameter 'max_iter' must be at least 1.",
+        )
     if lo is None and hi is None:
-        return
-    raise WeightingError.not_supported_yet(
+        return None
+    if trimming is not None:
+        raise WeightingError.not_supported_yet(
+            where=where,
+            param="trimming",
+            got=show(trimming),
+            hint=("bounds= already holds g within (lo, hi). Use bounds= or trimming=, not both."),
+        )
+    return _BoundedSolve(
+        lower=-math.inf if lo is None else float(lo),
+        upper=math.inf if hi is None else float(hi),
+        tol=float(tol),
+        max_iter=max_iter,
+        bounds=(lo, hi),
+    )
+
+
+def _calibrate_bounded(
+    W: np.ndarray,
+    X: np.ndarray,
+    solve: _BoundedSolve,
+    *,
+    scale: np.ndarray,
+    totals: np.ndarray,
+    domain_indices: np.ndarray | None,
+    controls_by_domain: dict[int, list[float]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Bounded weights for each column of ``W``, and per domain (rows) and column the largest
+    ``|misfit| / (1 + |t|)`` and the Newton steps taken; a single row without domains."""
+    args = (solve.lower, solve.upper, solve.tol, solve.max_iter, scale)
+    if domain_indices is None:
+        assert rust_calibrate_bounded is not None  # noqa: S101
+        out, achieved, steps = rust_calibrate_bounded(W, X, totals, *args)
+        return out, achieved[None, :], steps[None, :]
+    assert rust_calibrate_bounded_by_domain is not None  # noqa: S101
+    out, doms, achieved_d, steps_d = rust_calibrate_bounded_by_domain(
+        W, X, domain_indices, controls_by_domain, *args
+    )
+    achieved = np.empty_like(achieved_d)
+    steps = np.empty_like(steps_d)
+    achieved[doms] = achieved_d
+    steps[doms] = steps_d
+    return out, achieved, steps
+
+
+def _bounded_not_converged(
+    solve: _BoundedSolve,
+    achieved: np.ndarray,
+    steps: np.ndarray,
+    *,
+    where: str,
+    domains: list[Any],
+    replicates: Sequence[str] = (),
+) -> WeightingError | None:
+    """WEIGHTING_NOT_CONVERGED naming the domains (or replicates) whose solve stopped short."""
+    failed = ~(achieved < solve.tol)  # NaN counts as failed
+    if not failed.any():
+        return None
+    what = "Bounded calibration"
+    got: dict[str, Any] = {
+        "max_iter": solve.max_iter,
+        "achieved": float(np.nanmax(np.where(failed, achieved, np.nan))),
+    }
+    if replicates:
+        names = [replicates[j] for j in np.flatnonzero(failed.any(axis=0))]
+        what += f" of replicate weight(s) {show_list(names)}"
+        got["replicates"] = names
+    elif domains:
+        doms = [domains[d] for d in np.flatnonzero(failed[:, 0])]
+        what += f" in domain(s) {show_list(doms)}"
+        got["domains"] = doms
+    else:
+        got["steps"] = int(steps[0, 0])
+    return WeightingError.not_converged(
         where=where,
-        param="bounds",
-        got=f"bounds=({lo!r}, {hi!r})",
+        method="calibrate",
+        what=what,
+        max_iter=solve.max_iter,
+        got=got,
+        expected={"tol": solve.tol},
         hint=(
-            "Bounded calibration (R survey's calibrate(bounds=)) is not supported yet. "
-            "Leave bounds unset, or use trimming= to constrain calibrated weights."
+            f"Widen bounds (now {show(solve.bounds)}), increase max_iter (now "
+            f"{solve.max_iter}) or relax tol (now {solve.tol:g}). The largest miss is "
+            "|achieved - target| / (1 + |target|) over the controls."
         ),
     )
 
@@ -538,6 +664,8 @@ def calibrate_matrix(
     labels: Sequence[Category] | None = None,
     weights_only: bool = False,
     bounds: tuple[float | None, float | None] | None = None,
+    tol: float = 1e-7,
+    max_iter: int = 50,
     ignore_reps: bool = False,
     on_nonconvergence: str = "error",
     trimming: TrimConfig | None = None,
@@ -545,7 +673,7 @@ def calibrate_matrix(
 ) -> Any:
     where = "Sample.weighting.calibrate_matrix"
     check_on_finding(on_nonconvergence, param="on_nonconvergence", where=where)
-    _refuse_bounds(bounds, where=where)
+    solve = _bounded_solve(bounds, tol, max_iter, trimming, where=where)
     if controls is None:
         raise WeightingError.ValueError(
             title="No targets",
@@ -652,10 +780,11 @@ def calibrate_matrix(
 
     if by_cols is None:
         totals_arr = np.asarray(_totals(controls, "controls"), dtype=np.float64)
-        assert rust_calibrate is not None  # noqa: S101
-        # Always pass additive=False — the Rust flag returns g-factors rather
-        # than calibrated weights and must not be exposed to callers.
-        new_w = rust_calibrate(w.reshape(-1, 1), X, totals_arr, scale_arr, False)[:, 0]
+        if solve is None:
+            assert rust_calibrate is not None  # noqa: S101
+            # Always pass additive=False — the Rust flag returns g-factors rather
+            # than calibrated weights and must not be exposed to callers.
+            new_w = rust_calibrate(w.reshape(-1, 1), X, totals_arr, scale_arr, False)[:, 0]
     else:
         missing_by = [c for c in by_cols if c not in df.columns]
         if missing_by:
@@ -688,18 +817,36 @@ def calibrate_matrix(
         )
         for d_idx, domain in enumerate(domains):
             controls_dict_main[d_idx] = _totals(by_domain[domain], f"controls[{domain!r}]")
-        assert rust_calibrate_by_domain is not None  # noqa: S101
-        # Always pass additive=False — see note above.
-        new_w = rust_calibrate_by_domain(
-            w.reshape(-1, 1), X, domain_indices, controls_dict_main, scale_arr, False
-        )[:, 0]
+        if solve is None:
+            assert rust_calibrate_by_domain is not None  # noqa: S101
+            # Always pass additive=False — see note above.
+            new_w = rust_calibrate_by_domain(
+                w.reshape(-1, 1), X, domain_indices, controls_dict_main, scale_arr, False
+            )[:, 0]
+
+    # A bounded solve is judged by its own stopping rule, before anything is written.
+    bounded_err = None
+    if solve is not None:
+        bounded_w, achieved, steps = _calibrate_bounded(
+            w.reshape(-1, 1),
+            X,
+            solve,
+            scale=scale_arr,
+            totals=totals_arr,
+            domain_indices=None if by_cols is None else domain_indices,
+            controls_by_domain=controls_dict_main,
+        )
+        new_w = bounded_w[:, 0]
+        bounded_err = _bounded_not_converged(solve, achieved, steps, where=where, domains=domains)
+        if bounded_err is not None and on_nonconvergence == "error":
+            raise bounded_err
 
     # The solve can return weights that miss the controls (a singular or
     # ill-conditioned system, or inconsistent controls). A trimming cycle
     # checks the fit itself; otherwise it is checked here, before anything is
     # written, so raising leaves the sample untouched.
     missed = None
-    if trimming is None or weights_only:
+    if solve is None and (trimming is None or weights_only):
         missed = _controls_missed(
             new_w,
             X,
@@ -877,6 +1024,7 @@ def calibrate_matrix(
     # (a deleted PSU can take an auxiliary's only units).
     calib_reps = None
     rep_missed: dict[str, dict[str, Any]] = {}
+    rep_bounded_err = None
     if not ignore_reps and design.rep_wgts is not None and design.rep_wgts.columns:
         rep_cols = design.rep_wgts.columns
         wgts_arr = df.select(rep_cols).to_numpy().astype(np.float64)
@@ -886,7 +1034,27 @@ def calibrate_matrix(
         else:
             scale_arr = np.asarray(scale, dtype=np.float64)
 
-        if by_cols is None:
+        if solve is not None:
+            calib_reps, achieved_r, steps_r = _calibrate_bounded(
+                wgts_arr,
+                X,
+                solve,
+                scale=scale_arr,
+                totals=totals_arr,
+                domain_indices=None if by_cols is None else domain_indices,
+                controls_by_domain=controls_dict_main,
+            )
+            rep_bounded_err = _bounded_not_converged(
+                solve,
+                achieved_r,
+                steps_r,
+                where=where,
+                domains=domains,
+                replicates=[f"{wgt_name}{j + 1}" for j in range(len(rep_cols))],
+            )
+            if rep_bounded_err is not None and on_nonconvergence == "error":
+                raise rep_bounded_err
+        elif by_cols is None:
             if len(rep_cols) >= 10:
                 assert rust_calibrate_parallel is not None  # noqa: S101
                 calib_reps = rust_calibrate_parallel(wgts_arr, X, totals_arr, scale_arr)
@@ -901,17 +1069,18 @@ def calibrate_matrix(
                 wgts_arr, X, domain_indices, controls_dict_main, scale_arr, False
             )
 
-        for j in range(len(rep_cols)):
-            m = _controls_missed(
-                calib_reps[:, j],
-                X,
-                totals=totals_arr,
-                domains=domains,
-                domain_indices=domain_indices,
-                controls_by_domain=controls_dict_main,
-            )
-            if m is not None:
-                rep_missed[f"{wgt_name}{j + 1}"] = m
+        if solve is None:
+            for j in range(len(rep_cols)):
+                m = _controls_missed(
+                    calib_reps[:, j],
+                    X,
+                    totals=totals_arr,
+                    domains=domains,
+                    domain_indices=domain_indices,
+                    controls_by_domain=controls_dict_main,
+                )
+                if m is not None:
+                    rep_missed[f"{wgt_name}{j + 1}"] = m
         if rep_missed and on_nonconvergence == "error":
             raise _replicates_not_met(rep_missed, where=where)
 
@@ -991,6 +1160,22 @@ def calibrate_matrix(
                 extra=err.extra,
             )
         )
+    for err in (bounded_err, rep_bounded_err):
+        if err is not None:
+            sample.warn(
+                WeightingWarning(
+                    code=err.code,
+                    title=err.title,
+                    detail=err.detail.split(" The sample has NOT")[0]
+                    + f" {wgt_name!r} holds the last iterate.",
+                    where=where,
+                    level=finding_level(on_nonconvergence),
+                    param=err.param,
+                    expected=err.expected,
+                    got=err.got,
+                    hint=err.hint,
+                )
+            )
     if missed is not None:
         err = WeightingError.calibration_not_met(where=where, **missed)
         sample.warn(

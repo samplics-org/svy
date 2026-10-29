@@ -128,6 +128,11 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weighting::api::calibrate, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::calibrate_by_domain, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::calibrate_parallel, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::api::calibrate_bounded, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        weighting::api::calibrate_bounded_by_domain,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(weighting::api::trim_weights, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::trim_weights_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(weighting::api::brr_hadamard_size, m)?)?;

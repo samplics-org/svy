@@ -91,8 +91,8 @@ def _rename_note(old: str, new: str, kwargs: dict[str, Any]) -> str:
         )
     if new == "bounds" and old == "bounded":
         return (
-            "bounds=(lo, hi) bounds the factor g = new/old weight. Bounded calibration "
-            "is not supported yet, so leave it unset."
+            "bounds=(lo, hi) bounds the factor g = new/old weight, e.g. bounds=(0.5, 2.0); "
+            "None on a side leaves it open."
         )
     if new == "bounds":
         lo, hi = kwargs.get("ll_bound"), kwargs.get("up_bound")
@@ -1014,6 +1014,8 @@ class Weighting:
         where: WhereArg = None,
         scale: Number | list[Number] | np.ndarray = 1.0,
         bounds: tuple[float | None, float | None] | None = None,
+        tol: float = 1e-7,
+        max_iter: int = 50,
         wgt_name: str = "calib_wgt",
         update_design_wgts: bool = True,
         ignore_reps: bool = False,
@@ -1025,10 +1027,11 @@ class Weighting:
         """Calibrate weights to auxiliary control totals (GREG).
 
         Takes no ``cells``: the model is the ``controls`` keys, which may be
-        continuous auxiliaries as well as categorical terms. The linear
-        solution is closed form, so there is no ``tol`` or ``max_iter``; the
-        fit is checked afterwards against the controls at a relative
-        tolerance of 1e-4.
+        continuous auxiliaries as well as categorical terms. Without
+        ``bounds`` the linear solution is closed form, and the fit is checked
+        afterwards against the controls at a relative tolerance of 1e-4. With
+        ``bounds`` it is solved by Newton steps, as R's ``grake``, until
+        ``tol`` or ``max_iter``.
 
         Parameters
         ----------
@@ -1048,9 +1051,17 @@ class Weighting:
             ``variance=``); a number applies to every row.
         bounds : tuple[float | None, float | None] | None
             Bounds ``(lo, hi)`` on the adjustment factor g = new weight / old
-            weight. Not supported yet: setting a side raises
-            ``NOT_SUPPORTED``. Use ``trimming=`` to constrain calibrated
-            weights.
+            weight, held during the solve (R's ``calibrate(bounds=)`` with the
+            linear distance). None on a side leaves it open; None, or no side
+            set, keeps the closed form. Weights far below the controls (every
+            control over 20 times its weighted total, e.g. unit weights) are
+            first rescaled by the mean ratio, and the bounds apply after that,
+            as in R. Cannot be combined with ``trimming=``.
+        tol : float
+            With ``bounds``: stop once every control has
+            ``|achieved - target| / (1 + |target|) < tol`` (R's ``epsilon``).
+        max_iter : int
+            With ``bounds``: the most Newton steps (R's ``maxit``).
         wgt_name : str
             Name of the new weight column; replicate columns become
             ``<wgt_name>1..R``. It must not exist yet.
@@ -1065,7 +1076,9 @@ class Weighting:
         on_nonconvergence : {"error", "warn", "ignore"}
             What to do when the weights miss the controls
             (``CALIBRATION_NOT_MET``: a singular system or inconsistent
-            controls) or the trim-calibrate cycle runs out of cycles; with
+            controls), a bounded solve stops short of ``tol`` in the main or a
+            replicate weight (``WEIGHTING_NOT_CONVERGED``), or the
+            trim-calibrate cycle runs out of cycles; with
             "warn" or "ignore" the approximate solution is kept. "error"
             raises and leaves the sample as it was; "warn" records the finding
             in ``sample.warnings`` and raises it once as a
@@ -1088,6 +1101,8 @@ class Weighting:
             where=where,
             scale=scale,
             bounds=bounds,
+            tol=tol,
+            max_iter=max_iter,
             wgt_name=wgt_name,
             update_design_wgts=update_design_wgts,
             ignore_reps=ignore_reps,
@@ -1107,6 +1122,8 @@ class Weighting:
         labels: Sequence[Category] | None = None,
         weights_only: bool = False,
         bounds: tuple[float | None, float | None] | None = None,
+        tol: float = 1e-7,
+        max_iter: int = 50,
         ignore_reps: bool = False,
         on_nonconvergence: Literal["error", "warn", "ignore"] = "error",
         trimming: TrimConfig | None = None,
@@ -1116,8 +1133,8 @@ class Weighting:
         """Calibrate weights against an auxiliary matrix you built (GREG).
 
         ``calibrate`` without the term layer: ``aux_vars`` is used as given,
-        e.g. from ``build_aux_matrix``. Closed form like ``calibrate``, with
-        the fit checked at a relative tolerance of 1e-4.
+        e.g. from ``build_aux_matrix``. Solved like ``calibrate``: closed form
+        without ``bounds``, Newton steps with them.
 
         Parameters
         ----------
@@ -1148,9 +1165,17 @@ class Weighting:
             alone (``inplace`` is then ignored).
         bounds : tuple[float | None, float | None] | None
             Bounds ``(lo, hi)`` on the adjustment factor g = new weight / old
-            weight. Not supported yet: setting a side raises
-            ``NOT_SUPPORTED``. Use ``trimming=`` to constrain calibrated
-            weights.
+            weight, held during the solve (R's ``calibrate(bounds=)`` with the
+            linear distance). None on a side leaves it open; None, or no side
+            set, keeps the closed form. Weights far below the controls (every
+            control over 20 times its weighted total, e.g. unit weights) are
+            first rescaled by the mean ratio, and the bounds apply after that,
+            as in R. Cannot be combined with ``trimming=``.
+        tol : float
+            With ``bounds``: stop once every control has
+            ``|achieved - target| / (1 + |target|) < tol`` (R's ``epsilon``).
+        max_iter : int
+            With ``bounds``: the most Newton steps (R's ``maxit``).
         ignore_reps : bool
             Leave the replicate weights unadjusted. The new weight then has no
             replicate weights (variance is Taylor); the replicate columns stay
@@ -1158,8 +1183,9 @@ class Weighting:
             them.
         on_nonconvergence : {"error", "warn", "ignore"}
             What to do when the weights miss the controls
-            (``CALIBRATION_NOT_MET``) or the trim-calibrate cycle runs out of
-            cycles; with "warn" or "ignore" the approximate solution is kept.
+            (``CALIBRATION_NOT_MET``), a bounded solve stops short of ``tol``
+            (``WEIGHTING_NOT_CONVERGED``), or the trim-calibrate cycle runs out
+            of cycles; with "warn" or "ignore" the approximate solution is kept.
             "error" raises and leaves the sample as it was; "warn" records the
             finding in ``sample.warnings`` and raises it once as a
             ``SvyWarning``; "ignore" records it at INFO level without
@@ -1185,6 +1211,8 @@ class Weighting:
             labels=labels,
             weights_only=weights_only,
             bounds=bounds,
+            tol=tol,
+            max_iter=max_iter,
             ignore_reps=ignore_reps,
             on_nonconvergence=on_nonconvergence,
             trimming=trimming,

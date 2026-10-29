@@ -9,6 +9,8 @@ from svy_rs._internal import (
     KernelValueError,
     adjust_nr,
     calibrate,
+    calibrate_bounded,
+    calibrate_bounded_by_domain,
     calibrate_by_domain,
     calibrate_parallel,
     create_bootstrap_wgts,

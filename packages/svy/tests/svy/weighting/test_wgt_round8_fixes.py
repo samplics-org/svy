@@ -22,11 +22,6 @@ from svy.errors import Code, WeightingError
 from svy.weighting.types import TrimConfig
 
 
-# ---------------------------------------------------------------------------
-# W1 — bounded calibration blocked
-# ---------------------------------------------------------------------------
-
-
 def _calib_sample(n=40, seed=7):
     rng = np.random.default_rng(seed)
     return Sample(
@@ -39,16 +34,6 @@ def _calib_sample(n=40, seed=7):
         ),
         Design(wgt="wgt"),
     )
-
-
-def test_bounded_calibration_raises():
-    s = _calib_sample()
-    with pytest.raises(NotImplementedError, match="not supported") as ei:
-        s.weighting.calibrate(
-            controls={Cat("grp"): {"a": 40.0, "b": 40.0}},
-            bounds=(0.5, 2),
-        )
-    assert ei.value.code == "NOT_SUPPORTED" and ei.value.param == "bounds"
 
 
 # ---------------------------------------------------------------------------

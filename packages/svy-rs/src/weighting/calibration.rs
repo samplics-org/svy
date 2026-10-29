@@ -215,6 +215,268 @@ fn solve_pseudoinverse(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
     Ok(x)
 }
 
+/// Where a bounded solve stopped: the largest `|misfit| / (1 + |t|)` and the Newton steps taken.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct BoundedFit {
+    pub(crate) achieved: f64,
+    pub(crate) steps: usize,
+}
+
+/// Bounds `[lower, upper]` on g = new / old weight, with the Newton loop's stopping rule.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BoundedSolve {
+    pub(crate) lower: f64,
+    pub(crate) upper: f64,
+    pub(crate) tol: f64,
+    pub(crate) max_iter: usize,
+}
+
+/// Linear calibration with g held in `[lower, upper]`, per column: R survey's `grake` with
+/// `cal.linear`. Returns the weights and, per column, where the solve stopped; a column that
+/// did not converge holds the last iterate.
+pub(crate) fn calibrate_linear_bounded(
+    wgt: ArrayView2<f64>,
+    x_matrix: ArrayView2<f64>,
+    totals: ArrayView1<f64>,
+    scale: Option<ArrayView1<f64>>,
+    solve: BoundedSolve,
+) -> Result<(Array2<f64>, Vec<BoundedFit>)> {
+    let (n_obs, n_reps) = wgt.dim();
+    let (n_obs_x, n_aux) = x_matrix.dim();
+    if n_obs_x != n_obs {
+        return Err(WeightingError::DimensionMismatch {
+            expected: n_obs,
+            got: n_obs_x,
+        });
+    }
+    if totals.len() != n_aux {
+        return Err(WeightingError::DimensionMismatch {
+            expected: n_aux,
+            got: totals.len(),
+        });
+    }
+    let s = match scale {
+        Some(s_arr) if s_arr.len() != n_obs => {
+            return Err(WeightingError::DimensionMismatch {
+                expected: n_obs,
+                got: s_arr.len(),
+            });
+        }
+        Some(s_arr) => s_arr.to_owned(),
+        None => Array1::ones(n_obs),
+    };
+    if let Some((row, &value)) = s
+        .iter()
+        .enumerate()
+        .find(|(_, x)| !(x.is_finite() && **x > 0.0))
+    {
+        return Err(WeightingError::ScaleNotPositive { row, value });
+    }
+
+    let cols: std::result::Result<Vec<_>, WeightingError> = (0..n_reps)
+        .into_par_iter()
+        .map(|r| grake_linear(wgt.column(r), x_matrix, totals, s.view(), solve))
+        .collect();
+
+    let mut result = Array2::zeros((n_obs, n_reps));
+    let mut fits = Vec::with_capacity(n_reps);
+    for (r, (col, fit)) in cols?.into_iter().enumerate() {
+        result.column_mut(r).assign(&col);
+        fits.push(fit);
+    }
+    Ok((result, fits))
+}
+
+/// One column of `calibrate_linear_bounded`, a literal port of `grake` so results match R.
+fn grake_linear(
+    wgt: ArrayView1<f64>,
+    x: ArrayView2<f64>,
+    totals: ArrayView1<f64>,
+    scale: ArrayView1<f64>,
+    solve: BoundedSolve,
+) -> Result<(Array1<f64>, BoundedFit)> {
+    let BoundedSolve {
+        lower,
+        upper,
+        tol,
+        max_iter,
+    } = solve;
+    let (n_obs, n_aux) = x.dim();
+    // NaN must propagate as in R's pmin/pmax (f64::max drops it), so step halving sees it.
+    let fm1 = |u: f64| {
+        if u.is_nan() {
+            f64::NAN
+        } else {
+            (u + 1.0).max(lower).min(upper) - 1.0
+        }
+    };
+    // Strict, as in R: a row at a bound drops out of the Jacobian and stops moving.
+    let deriv = |u: f64| {
+        if u < upper - 1.0 && u > lower - 1.0 {
+            1.0
+        } else {
+            0.0
+        }
+    };
+
+    let mut w = wgt.to_owned();
+    let mut sample_total = x.t().dot(&w);
+
+    // R rescales weights far below the totals (e.g. unit weights) and reads the bounds after it.
+    let ratios = &totals / &sample_total;
+    let mut prescale = None;
+    if ratios.iter().all(|r| r.is_finite()) && ratios.fold(f64::INFINITY, |m, &r| m.min(r)) > 20.0 {
+        let c = ratios.mean().unwrap_or(1.0);
+        w *= c;
+        sample_total *= c;
+        prescale = Some(c);
+    }
+
+    let x_eta = |eta: &Array1<f64>| -> Array1<f64> { x.dot(eta) / scale };
+    let misfit_of = |u: &Array1<f64>| -> Array1<f64> {
+        let shift: Array1<f64> = Array1::from_shape_fn(n_obs, |i| w[i] * fm1(u[i]));
+        &totals - &sample_total - &x.t().dot(&shift)
+    };
+    let achieved_of = |misfit: &Array1<f64>| -> f64 {
+        misfit
+            .iter()
+            .zip(totals.iter())
+            .map(|(m, t)| m.abs() / (1.0 + t.abs()))
+            .fold(0.0, |acc: f64, v| {
+                if v.is_nan() || acc.is_nan() {
+                    f64::NAN
+                } else {
+                    acc.max(v)
+                }
+            })
+    };
+
+    let mut eta: Array1<f64> = Array1::zeros(n_aux);
+    let mut u = x_eta(&eta);
+    let mut iter = 1usize;
+    let mut steps = 0usize;
+    let achieved = loop {
+        steps += 1;
+        let mut t_mat = Array2::zeros((n_aux, n_aux));
+        for i in 0..n_obs {
+            let c = w[i] * deriv(u[i]) / scale[i];
+            if c == 0.0 {
+                continue;
+            }
+            for j1 in 0..n_aux {
+                let a = x[[i, j1]] * c;
+                for j2 in 0..n_aux {
+                    t_mat[[j1, j2]] += a * x[[i, j2]];
+                }
+            }
+        }
+        let mut deta = solve_pseudoinverse(&t_mat, &misfit_of(&u))?;
+        eta += &deta;
+        u = x_eta(&eta);
+        while iter < max_iter && u.iter().any(|v| !fm1(*v).is_finite()) {
+            iter += 1;
+            deta /= 2.0;
+            eta -= &deta;
+            u = x_eta(&eta);
+        }
+        let achieved = achieved_of(&misfit_of(&u));
+        if achieved < tol {
+            break achieved;
+        }
+        iter += 1;
+        if iter > max_iter {
+            break achieved;
+        }
+    };
+
+    let c = prescale.unwrap_or(1.0);
+    let new_w = Array1::from_shape_fn(n_obs, |i| wgt[i] * (1.0 + fm1(u[i])) * c);
+    Ok((new_w, BoundedFit { achieved, steps }))
+}
+
+/// Weights, the domains in ascending order, and each domain's fit per column.
+type BoundedByDomain = (Array2<f64>, Vec<i64>, Vec<Vec<BoundedFit>>);
+
+/// `calibrate_linear_bounded` separately within each domain, against that domain's totals.
+pub(crate) fn calibrate_bounded_by_domain(
+    wgt: ArrayView2<f64>,
+    x_matrix: ArrayView2<f64>,
+    domain: ArrayView1<i64>,
+    controls: &HashMap<i64, Array1<f64>>,
+    scale: Option<ArrayView1<f64>>,
+    solve: BoundedSolve,
+) -> Result<BoundedByDomain> {
+    let (n_obs, _) = wgt.dim();
+    if domain.len() != n_obs {
+        return Err(WeightingError::DimensionMismatch {
+            expected: n_obs,
+            got: domain.len(),
+        });
+    }
+    if x_matrix.nrows() != n_obs {
+        return Err(WeightingError::DimensionMismatch {
+            expected: n_obs,
+            got: x_matrix.nrows(),
+        });
+    }
+    let s = match scale {
+        Some(s_arr) if s_arr.len() != n_obs => {
+            return Err(WeightingError::DimensionMismatch {
+                expected: n_obs,
+                got: s_arr.len(),
+            });
+        }
+        Some(s_arr) => s_arr.to_owned(),
+        None => Array1::ones(n_obs),
+    };
+
+    let (domain_sorted, sort_idx, unsort_idx) = sort_by_domain(&domain);
+    let wgt_sorted = reorder_rows(wgt, &sort_idx);
+    let x_sorted = reorder_rows_2d(x_matrix, &sort_idx);
+    let s_sorted = reorder_array(&s.view(), &sort_idx);
+
+    let boundaries = find_domain_boundaries(&domain_sorted);
+    if let Some(&dom_val) = boundaries
+        .keys()
+        .filter(|d| !controls.contains_key(d))
+        .min()
+    {
+        return Err(WeightingError::MissingControls(dom_val));
+    }
+    let mut tasks: Vec<_> = boundaries
+        .iter()
+        .map(|(&d, &(start, end))| (d, start, end))
+        .collect();
+    tasks.sort_by_key(|&(d, _, _)| d);
+
+    let solved: std::result::Result<Vec<_>, WeightingError> = tasks
+        .par_iter()
+        .map(|&(d, start, end)| {
+            let (w, fits) = calibrate_linear_bounded(
+                wgt_sorted.slice(s![start..end, ..]),
+                x_sorted.slice(s![start..end, ..]),
+                controls[&d].view(),
+                Some(s_sorted.slice(s![start..end])),
+                solve,
+            )?;
+            Ok((start, end, w, fits))
+        })
+        .collect();
+
+    let mut result_sorted = wgt_sorted.clone();
+    let mut fits_by_domain = Vec::with_capacity(tasks.len());
+    for (start, end, w, fits) in solved? {
+        result_sorted.slice_mut(s![start..end, ..]).assign(&w);
+        fits_by_domain.push(fits);
+    }
+    let domains = tasks.iter().map(|&(d, _, _)| d).collect();
+    Ok((
+        reorder_rows(result_sorted.view(), &unsort_idx),
+        domains,
+        fits_by_domain,
+    ))
+}
+
 /// `calibrate_linear` separately within each domain, against that domain's control totals.
 pub(crate) fn calibrate_by_domain(
     wgt: ArrayView2<f64>,
@@ -421,6 +683,164 @@ mod tests {
         }
         let females: f64 = (0..6).map(|i| female[i] * w_full[[i, 0]]).sum();
         assert!((w_full.column(0).sum() - 12.0).abs() < 1e-12 && (females - 7.0).abs() < 1e-12);
+    }
+
+    fn solve(lower: f64, upper: f64, max_iter: usize) -> BoundedSolve {
+        BoundedSolve {
+            lower,
+            upper,
+            tol: 1e-12,
+            max_iter,
+        }
+    }
+
+    #[test]
+    fn bounds_that_never_bind_reproduce_the_closed_form() {
+        let wgt = array![[1.0, 2.0], [2.0, 1.0], [1.5, 1.5], [1.0, 3.0]];
+        let x = array![[1.0, 1.0], [1.0, 2.0], [1.0, 3.0], [1.0, 4.0]];
+        let totals = array![7.0, 18.0];
+        let open = calibrate_linear(wgt.view(), x.view(), totals.view(), None, false).unwrap();
+        let (bounded, fits) = calibrate_linear_bounded(
+            wgt.view(),
+            x.view(),
+            totals.view(),
+            None,
+            solve(0.0, 10.0, 50),
+        )
+        .unwrap();
+        for (a, b) in open.iter().zip(bounded.iter()) {
+            assert_abs_diff_eq!(a, b, epsilon = 1e-12);
+        }
+        assert!(fits.iter().all(|f| f.achieved < 1e-12 && f.steps == 1));
+    }
+
+    #[test]
+    fn a_row_at_the_bound_stops_moving_and_the_rest_meet_the_total() {
+        // x = 1..4, unit weights, total 15: unbounded g = 1 + x/6 puts row 4 at 5/3. Held at
+        // 1.6, rows 1-3 solve 6 + 14λ = 15 - 6.4, so λ = 2.6/14.
+        let wgt = array![[1.0], [1.0], [1.0], [1.0]];
+        let x = array![[1.0], [2.0], [3.0], [4.0]];
+        let (w, fits) = calibrate_linear_bounded(
+            wgt.view(),
+            x.view(),
+            array![15.0].view(),
+            None,
+            solve(0.5, 1.6, 50),
+        )
+        .unwrap();
+        let lam = 2.6 / 14.0;
+        let expected = [1.0 + lam, 1.0 + 2.0 * lam, 1.0 + 3.0 * lam, 1.6];
+        for i in 0..4 {
+            assert_abs_diff_eq!(w[[i, 0]], expected[i], epsilon = 1e-14);
+        }
+        assert_eq!(fits[0].steps, 2);
+        assert!(fits[0].achieved < 1e-12);
+    }
+
+    #[test]
+    fn unreachable_totals_keep_the_last_iterate_and_report_the_miss() {
+        // At most 1.4 * (1 + 2 + 3 + 4) = 14 < 15: every row ends at the bound, missing by 1/16.
+        let wgt = array![[1.0], [1.0], [1.0], [1.0]];
+        let x = array![[1.0], [2.0], [3.0], [4.0]];
+        let (w, fits) = calibrate_linear_bounded(
+            wgt.view(),
+            x.view(),
+            array![15.0].view(),
+            None,
+            solve(0.5, 1.4, 5),
+        )
+        .unwrap();
+        assert!(w.iter().all(|&v| (v - 1.4).abs() < 1e-14));
+        assert_eq!(fits[0].steps, 5);
+        assert_abs_diff_eq!(fits[0].achieved, 1.0 / 16.0, epsilon = 1e-14);
+    }
+
+    #[test]
+    fn weights_far_below_the_totals_are_rescaled_before_the_bounds_apply() {
+        // Totals 50x the weighted sums: R rescales by 50 first, so g = 1 fits within (0.9, 1.1).
+        let wgt = array![[1.0], [1.0]];
+        let x = array![[1.0], [1.0]];
+        let (w, fits) = calibrate_linear_bounded(
+            wgt.view(),
+            x.view(),
+            array![100.0].view(),
+            None,
+            solve(0.9, 1.1, 50),
+        )
+        .unwrap();
+        assert_abs_diff_eq!(w[[0, 0]], 50.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(w[[1, 0]], 50.0, epsilon = 1e-12);
+        assert!(fits[0].achieved < 1e-12);
+    }
+
+    #[test]
+    fn bounded_domains_solve_apart_and_report_in_domain_order() {
+        let wgt = array![[1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0]];
+        let x = array![[1.0], [2.0], [3.0], [4.0], [1.0], [2.0], [3.0], [4.0]];
+        let domain = array![7, 7, 7, 7, 3, 3, 3, 3];
+        let mut controls = HashMap::new();
+        controls.insert(7i64, array![15.0]);
+        controls.insert(3i64, array![10.0]);
+        let (w, domains, fits) = calibrate_bounded_by_domain(
+            wgt.view(),
+            x.view(),
+            domain.view(),
+            &controls,
+            None,
+            solve(0.5, 1.6, 50),
+        )
+        .unwrap();
+        assert_eq!(domains, vec![3, 7]);
+        // Domain 3 already meets its total; domain 7 is the case above.
+        let lam = 2.6 / 14.0;
+        let expected = [
+            1.0 + lam,
+            1.0 + 2.0 * lam,
+            1.0 + 3.0 * lam,
+            1.6,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+        ];
+        for i in 0..8 {
+            assert_abs_diff_eq!(w[[i, 0]], expected[i], epsilon = 1e-14);
+        }
+        assert_eq!((fits[0][0].steps, fits[1][0].steps), (1, 2));
+    }
+
+    #[test]
+    fn bounded_bad_dims_are_errors() {
+        let wgt = array![[1.0], [1.0], [1.0]];
+        let x = array![[1.0], [2.0], [3.0]];
+        let res = calibrate_linear_bounded(
+            wgt.view(),
+            x.view(),
+            array![10.0, 20.0].view(),
+            None,
+            solve(0.5, 2.0, 50),
+        );
+        assert!(
+            matches!(
+                &res,
+                Err(WeightingError::DimensionMismatch {
+                    expected: 1,
+                    got: 2
+                })
+            ),
+            "got {res:?}"
+        );
+        let res = calibrate_linear_bounded(
+            wgt.view(),
+            x.view(),
+            array![10.0].view(),
+            Some(array![1.0, 0.0, 1.0].view()),
+            solve(0.5, 2.0, 50),
+        );
+        assert!(
+            matches!(&res, Err(WeightingError::ScaleNotPositive { row: 1, .. })),
+            "got {res:?}"
+        );
     }
 
     #[test]

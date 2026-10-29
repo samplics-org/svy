@@ -4,6 +4,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+### Added
+
+- `calibrate_bounded` and `calibrate_bounded_by_domain`: linear calibration with g held in `[lower, upper]`, a port of R survey's `grake` with `cal.linear` (Newton steps on `MASS::ginv`, R's stopping rule and pre-scaling). Each returns the weights and, per column (and domain), the largest `|misfit| / (1 + |t|)` and the Newton steps taken; a column that did not converge holds the last iterate.
+
 ## [0.20.0] — 2026-10-28
 
 ### Added
