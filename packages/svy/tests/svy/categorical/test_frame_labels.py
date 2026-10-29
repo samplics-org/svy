@@ -236,7 +236,8 @@ def test_group_label_follows_to_polars_switch():
 @pytest.mark.parametrize("test,component", TEST_CASES)
 def test_untidy_rows_carry_by_label(sample, test, component):
     df = _export(TESTS[test](sample, by="vi"), component, tidy=False)
-    assert df["by_label"].to_list() == _labels_of("vi", df["by_level"].to_list())
+    levels = [lv["vi"] for lv in df["by_level"].to_list()]
+    assert df["by_label"].to_list() == [{"vi": lab} for lab in _labels_of("vi", levels)]
 
 
 @pytest.mark.parametrize("test,component", TEST_CASES)

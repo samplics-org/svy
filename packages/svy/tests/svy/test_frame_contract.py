@@ -226,3 +226,59 @@ def test_saved_result_gives_the_live_frame(sample, case, method):
     result = build(sample, method=method, alpha=0.1)
     live = result.fitted if hasattr(result, "fitted") else result
     assert to_polars(from_json(to_json(live)), **opts).equals(live.to_polars(**opts))
+
+
+EMPTY_TAIL = ["est", "se", "lci", "uci", "cv"]
+
+
+def test_empty_estimate_keeps_its_columns():
+    from svy.core.enumerations import PopParam
+    from svy.estimation.estimate import Estimate
+
+    df = Estimate(PopParam.MEAN, alpha=0.1).to_polars()
+    assert df.height == 0
+    assert df.schema == pl.Schema(
+        {"y_var": pl.String}
+        | dict.fromkeys([*EMPTY_TAIL, "df"], pl.Float64)
+        | {"n": pl.Int64, "param": pl.String, "variance": pl.String, "alpha": pl.Float64}
+    )
+
+
+@pytest.mark.parametrize("colvar", [None, "b"])
+def test_empty_table_keeps_its_columns(colvar):
+    from svy.categorical.table import Table
+
+    table = (
+        Table.one_way(rowvar="a", estimates=[])
+        if colvar is None
+        else Table.two_way(rowvar="a", colvar=colvar, estimates=[])
+    )
+    df = table.to_polars()
+    levels = ["a"] if colvar is None else ["a", "b"]
+    assert df.height == 0
+    assert df.columns == [*levels, *EMPTY_TAIL, "n", "share_of", "units", "variance", "alpha"]
+    assert df.select(EMPTY_TAIL).schema == pl.Schema(dict.fromkeys(EMPTY_TAIL, pl.Float64))
+    assert df.schema["n"] == pl.Int64
+
+
+UNTIDY_BY = {
+    "ttest_test": lambda s: s.categorical.ttest("y", group="b", by="g").to_polars(tidy=False),
+    "ttest_estimates": lambda s: s.categorical.ttest("y", group="b", by="g").to_polars(
+        "estimates", tidy=False
+    ),
+    "rank_two": lambda s: s.categorical.ranktest("y", group="b", by="g").to_polars(tidy=False),
+    "rank_k": lambda s: s.categorical.ranktest(
+        "y", group="k", by="g", score="kruskal-wallis"
+    ).to_polars(tidy=False),
+}
+
+
+@pytest.mark.parametrize("case", list(UNTIDY_BY))
+def test_untidy_by_is_keyed_by_variable_with_one_by(sample, case):
+    df = UNTIDY_BY[case](sample)
+    est = sample.estimation.mean("y", by="g").to_polars(tidy=False)
+    assert df.schema["by_level"] == est.schema["by_level"]
+    assert df["by"].to_list() == [["g"]] * df.height
+    levels = [lv["g"] for lv in df["by_level"].to_list()]
+    assert set(levels) == {1, 2}
+    assert df["by_label"].to_list() == [{"g": {1: "Men", 2: "Women"}[g]} for g in levels]

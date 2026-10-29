@@ -20,6 +20,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
   - tables gain `cv`; rank tests lose `to_polars("estimates")`, which was always empty; `GLM.to_polars()` takes `exponentiate=` as the fit does.
 
   A variable named like one of these columns raises `RESULT_COLUMN_CLASH`.
+- **Breaking: untidy t-test and rank-test frames give `by` as a list and `by_level`/`by_label` as structs keyed by variable, with one `by` variable too**, as untidy estimate frames do. An empty estimate or table keeps its number and settings columns instead of returning a frame with none.
 - **Tables, t-tests and rank tests export their levels as estimates do.** `Table.to_polars()` gives each level in its column's type (Float64 `1.0`, Boolean `true`, no longer the text `"1"`, `"true"`) with a `<var>_label` column beside each labelled variable; t-tests and rank tests by domain add one for each labelled `by` variable (`by_label` with `tidy=False`). `to_polars(use_labels=)` switches them off: on `Table` it defaults like `Estimate`, on t-tests and rank tests it defaults to on and also drops the group's label column. A name taken by a variable raises `LABEL_COLUMN_CLASH`, as for estimates.
 
 ### Fixed
