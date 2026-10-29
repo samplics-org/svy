@@ -18,6 +18,7 @@ from .helpers import (
     _extract_from_zip,
     _normalize_n_max,
     _reject_nul,
+    _reject_nul_values,
     _split_encoding,
     _with_bad_string_hint,
 )
@@ -597,6 +598,7 @@ def write_sav(
             "SPSS user-missing values apply only to string columns of at most 8 bytes; "
             f"columns: {too_wide}"
         )
+    _reject_nul_values(df)
     _reject_nul("variable labels", (var_labels or {}).items())
     _reject_nul(
         "value labels",

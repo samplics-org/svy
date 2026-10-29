@@ -11,6 +11,8 @@ from collections.abc import Iterable
 from contextlib import ExitStack
 from typing import Any
 
+import polars as pl
+
 
 # ---------------- encoding ----------------
 
@@ -53,6 +55,18 @@ def _reject_nul(what: str, named_texts: Iterable[tuple[str, object]]) -> None:
     bad = sorted({name for name, text in named_texts if "\x00" in str(text)})
     if bad:
         raise ValueError(f"{what} cannot contain NUL (\\x00): {bad}")
+
+
+def _reject_nul_values(df: pl.DataFrame) -> None:
+    """Raise ``ValueError`` naming each text column with a NUL in a value: ReadStat takes C strings."""
+    bad = [
+        name
+        for name, dt in df.schema.items()
+        if isinstance(dt, (pl.String, pl.Categorical, pl.Enum))
+        and df[name].cast(pl.String).str.contains("\x00", literal=True).any()
+    ]
+    if bad:
+        raise ValueError(f"string values cannot contain NUL (\\x00): {bad}")
 
 
 # ---------------- n_max normalization ----------------

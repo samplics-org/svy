@@ -22,6 +22,7 @@ from .helpers import (
     _extract_from_zip,
     _normalize_n_max,
     _reject_nul,
+    _reject_nul_values,
     _split_encoding,
     _warn_catalog_error,
     _with_bad_string_hint,
@@ -823,6 +824,7 @@ def write_xpt(
         raise ValueError(f"var_labels name columns that are not in the DataFrame: {unknown}")
     _reject_nul("name and label", [("name", name), ("label", label)])
     _reject_nul("variable labels", (var_labels or {}).items())
+    _reject_nul_values(df)
 
     # --- XPT requires numeric == double; make that explicit ---
     int_cols = [

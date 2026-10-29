@@ -4,6 +4,10 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+### Fixed
+
+- **`write_sav` and `write_xpt` wrote a string value containing NUL (`\x00`) as an empty string.** They now raise `ValueError` naming each such column, as `write_dta` did. The native writers raise `INVALID_VALUE` naming the column and row.
+
 ## [0.8.0] — 2026-10-28
 
 ### Added

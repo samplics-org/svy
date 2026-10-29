@@ -185,3 +185,51 @@ def test_native_xpt_writer_rejects_bad_header(tmp_path, kwargs, message):
     args = {"version": 8, "name": "DATA", "label": None, **kwargs}
     with pytest.raises(ValueError, match=message):
         native.df_write_xpt_file(_ipc(_df()), str(tmp_path / "n.xpt"), **args)
+
+
+def _nul_df(dtype):
+    import polars as pl
+
+    return pl.DataFrame(
+        {
+            "x": [1.0, 2.0, 3.0],
+            "s": pl.Series(["ok", "a\x00b", None]).cast(dtype),
+            "t": ["\x00", "u", "v"],
+        }
+    )
+
+
+@pytest.mark.parametrize("write", ["write_sav", "write_xpt"])
+@pytest.mark.parametrize("dtype", ["String", "Categorical", "Enum"])
+def test_writers_reject_nul_in_string_values(tmp_path, write, dtype):
+    import polars as pl
+    import svy_io
+
+    pl_dtype = pl.Enum(["ok", "a\x00b"]) if dtype == "Enum" else getattr(pl, dtype)
+    path = tmp_path / "out.bin"
+    with pytest.raises(
+        ValueError, match=r"^string values cannot contain NUL \(\\x00\): \['s', 't'\]$"
+    ):
+        getattr(svy_io, write)(_nul_df(pl_dtype), path)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    ("write", "args"),
+    [
+        ("df_write_sav_file", ()),
+        ("df_write_xpt_file", (8, "DATA", None)),
+        ("df_write_dta_file", (118, None, None, None, 2045, None)),
+    ],
+)
+def test_native_writers_reject_nul_in_string_values(tmp_path, write, args):
+    import polars as pl
+
+    from svy_io import svyreadstat_rs as native
+
+    path = tmp_path / "n.bin"
+    with pytest.raises(
+        ValueError, match="string value in column 's' at row 1 contains an embedded NUL"
+    ):
+        getattr(native, write)(_ipc(_nul_df(pl.String).drop("t")), str(path), *args)
+    assert not path.exists()
