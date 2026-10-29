@@ -31,7 +31,7 @@ use readstat_sys::{
 use crate::errors::{Error, Op, Result};
 use crate::write_common::{
     OutputFile, StringColStats, WriterGuard, as_f64_opt, compute_string_metadata, data_writer_cb,
-    get_string_value, ipc_to_batches, is_text_dt, write_rc,
+    get_string_value, ipc_to_batches, is_text_dt, nul_value_error, write_rc,
 };
 
 // ---- SPSS epoch math ----------------------------------------------------
@@ -426,11 +426,11 @@ fn write_spss_minimal(
                         Some(Ok(cs)) => unsafe {
                             readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
                         },
-                        // A NUL cannot be stored, so the value is written as missing.
+                        Some(Err(_)) => {
+                            return Err(nul_value_error(b.schema().field(j).name(), row));
+                        }
                         // SAFETY: `rvars[j]` belongs to the live `writer`.
-                        Some(Err(_)) | None => unsafe {
-                            readstat_insert_missing_value(writer, rvars[j])
-                        },
+                        None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
                     }
                 } else {
                     match sav_f64_opt(arr.as_ref(), i) {

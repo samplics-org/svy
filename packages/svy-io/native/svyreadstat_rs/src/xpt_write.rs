@@ -18,7 +18,7 @@ use readstat_sys::{
 use crate::errors::{Error, Op, Result};
 use crate::write_common::{
     OutputFile, WriterGuard, as_f64_opt, data_writer_cb, get_string_value, ipc_to_batches,
-    is_text_dt, write_rc,
+    is_text_dt, nul_value_error, write_rc,
 };
 
 fn write_xpt_impl(
@@ -200,11 +200,11 @@ fn write_xpt_impl(
                         Some(Ok(cs)) => unsafe {
                             readstat_insert_string_value(writer, rvars[j], cs.as_ptr())
                         },
-                        // A NUL cannot be stored, so the value is written as missing.
+                        Some(Err(_)) => {
+                            return Err(nul_value_error(batch.schema().field(j).name(), row));
+                        }
                         // SAFETY: `rvars[j]` belongs to the live `writer`.
-                        Some(Err(_)) | None => unsafe {
-                            readstat_insert_missing_value(writer, rvars[j])
-                        },
+                        None => unsafe { readstat_insert_missing_value(writer, rvars[j]) },
                     }
                 } else {
                     // XPT's IBM floats hold no infinity or NaN (NaN came out as +inf); haven writes

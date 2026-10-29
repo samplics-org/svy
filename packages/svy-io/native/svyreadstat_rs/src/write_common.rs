@@ -62,6 +62,13 @@ pub(crate) fn get_string_value(a: &dyn Array, row: usize) -> Option<&str> {
     }
 }
 
+/// ReadStat stores C strings, so a value holding a NUL cannot be written.
+pub(crate) fn nul_value_error(col: &str, row: usize) -> Error {
+    Error::Invalid(format!(
+        "string value in column '{col}' at row {row} contains an embedded NUL"
+    ))
+}
+
 pub(crate) fn dict_string_at_any(a: &dyn Array, row: usize) -> Option<&str> {
     macro_rules! try_dict {
         ($T:ty) => {{
