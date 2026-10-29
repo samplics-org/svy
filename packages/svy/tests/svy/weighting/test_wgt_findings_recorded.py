@@ -535,11 +535,6 @@ def test_calibrate_where_carries_the_finding(cal):
     assert _one(out, NOTMET)
 
 
-def test_calibrate_bounded_still_refused(cal):
-    with pytest.raises(NotImplementedError):
-        cal.weighting.calibrate(controls={"x": 40}, bounds=(0.5, 2))
-
-
 def test_calibrate_trimming_cycle_owns_the_fit_check(cal):
     cfg = TrimConfig(upper=6.0, max_iter=3)
     with pytest.raises(WeightingError) as ei:

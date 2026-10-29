@@ -207,6 +207,106 @@ pub(crate) fn calibrate_parallel(
     Ok(result.into_pyarray(py).to_owned().into())
 }
 
+/// What the bounded calibrations return: weights, then per column the largest
+/// `|misfit| / (1 + |t|)` and the Newton steps taken.
+type BoundedOutput = (
+    Py<PyArray2<f64>>,
+    Py<numpy::PyArray1<f64>>,
+    Py<numpy::PyArray1<usize>>,
+);
+
+#[pyfunction]
+#[pyo3(signature = (wgt, x_matrix, totals, lower, upper, tol, max_iter, scale=None))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn calibrate_bounded(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    x_matrix: PyReadonlyArray2<f64>,
+    totals: PyReadonlyArray1<f64>,
+    lower: f64,
+    upper: f64,
+    tol: f64,
+    max_iter: usize,
+    scale: Option<PyReadonlyArray1<f64>>,
+) -> PyResult<BoundedOutput> {
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
+    let (w, fits) = crate::weighting::calibration::calibrate_linear_bounded(
+        wgt.as_array(),
+        x_matrix.as_array(),
+        totals.as_array(),
+        scale_owned.as_ref().map(|a| a.view()),
+        crate::weighting::calibration::BoundedSolve {
+            lower,
+            upper,
+            tol,
+            max_iter,
+        },
+    )
+    .map_err(|e| to_py_err(&e))?;
+    let achieved: Vec<f64> = fits.iter().map(|f| f.achieved).collect();
+    let steps: Vec<usize> = fits.iter().map(|f| f.steps).collect();
+    Ok((
+        w.into_pyarray(py).to_owned().into(),
+        Array1::from(achieved).into_pyarray(py).to_owned().into(),
+        Array1::from(steps).into_pyarray(py).to_owned().into(),
+    ))
+}
+
+/// `calibrate_bounded` per domain: weights, then per domain (rows, ascending domain code) and
+/// column the largest `|misfit| / (1 + |t|)` and the Newton steps taken.
+type BoundedByDomainOutput = (
+    Py<PyArray2<f64>>,
+    Vec<i64>,
+    Py<PyArray2<f64>>,
+    Py<PyArray2<usize>>,
+);
+
+#[pyfunction]
+#[pyo3(signature = (wgt, x_matrix, domain, controls_dict, lower, upper, tol, max_iter, scale=None))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn calibrate_bounded_by_domain(
+    py: Python<'_>,
+    wgt: PyReadonlyArray2<f64>,
+    x_matrix: PyReadonlyArray2<f64>,
+    domain: PyReadonlyArray1<i64>,
+    controls_dict: std::collections::HashMap<i64, Vec<f64>>,
+    lower: f64,
+    upper: f64,
+    tol: f64,
+    max_iter: usize,
+    scale: Option<PyReadonlyArray1<f64>>,
+) -> PyResult<BoundedByDomainOutput> {
+    let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
+    let controls: std::collections::HashMap<i64, Array1<f64>> = controls_dict
+        .into_iter()
+        .map(|(k, v)| (k, Array1::from(v)))
+        .collect();
+    let (w, domains, fits) = crate::weighting::calibration::calibrate_bounded_by_domain(
+        wgt.as_array(),
+        x_matrix.as_array(),
+        domain.as_array(),
+        &controls,
+        scale_owned.as_ref().map(|a| a.view()),
+        crate::weighting::calibration::BoundedSolve {
+            lower,
+            upper,
+            tol,
+            max_iter,
+        },
+    )
+    .map_err(|e| to_py_err(&e))?;
+    let n_cols = w.ncols();
+    let achieved =
+        ndarray::Array2::from_shape_fn((fits.len(), n_cols), |(d, r)| fits[d][r].achieved);
+    let steps = ndarray::Array2::from_shape_fn((fits.len(), n_cols), |(d, r)| fits[d][r].steps);
+    Ok((
+        w.into_pyarray(py).to_owned().into(),
+        domains,
+        achieved.into_pyarray(py).to_owned().into(),
+        steps.into_pyarray(py).to_owned().into(),
+    ))
+}
+
 // ============================================================================
 // Replicate weight creation
 // ============================================================================
