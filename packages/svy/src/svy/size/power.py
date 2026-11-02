@@ -10,6 +10,10 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from svy.core.types import DomainScalarMap, Number
+from svy.size.mde_goals import mde_mean as _mde_mean
+from svy.size.mde_goals import mde_means as _mde_means
+from svy.size.mde_goals import mde_prop as _mde_prop
+from svy.size.mde_goals import mde_props as _mde_props
 from svy.size.power_compare_goals import power_compare_means as _power_compare_means
 from svy.size.power_compare_goals import power_compare_props as _power_compare_props
 from svy.size.power_goals import power_test_mean as _power_test_mean
@@ -264,6 +268,186 @@ class Power:
             p1,
             p2,
             n,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            alloc_ratio=alloc_ratio,
+            method=method,
+            alpha=alpha,
+            var_mode=var_mode,
+            deff=deff,
+            resp_rate=resp_rate,
+            rho=rho,
+            overlap=overlap,
+        )
+
+    @experimental
+    def mde_mean(
+        self,
+        mu0: Number | DomainScalarMap,
+        sigma: Number | DomainScalarMap,
+        n: Number | DomainScalarMap,
+        *,
+        power: Number | DomainScalarMap = 0.80,
+        direction: Literal["upper", "lower"] = "upper",
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        method: Literal["wald"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+    ) -> Power:
+        """
+        Minimum detectable effect of the z test of H0: mu = mu0: the smallest ``mu1 - mu0``
+        that ``n`` selected units detect with probability ``power``.
+
+        The result is in ``.effect`` (the alternative is ``mu0 + .effect``); ``direction`` picks
+        the side of the null, and ``"lower"`` gives a negative effect. Everything else is as in
+        ``test_mean``, whose power at ``mu1 = mu0 + .effect`` is ``power``.
+
+        Raises
+        ------
+        SelectionError
+            ``INVALID_RANGE`` unless ``alpha < power < 1`` (with no effect the power is
+            ``alpha``); ``INVALID_VALUE`` for an equivalence test (two-sided with ``delta``),
+            which has no minimum detectable effect, and for ``direction="lower"`` with a
+            margin; ``POWER_UNREACHABLE`` when no effect reaches ``power``.
+        """
+        return _mde_mean(
+            self,
+            mu0,
+            sigma,
+            n,
+            power=power,
+            direction=direction,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            method=method,
+            alpha=alpha,
+            deff=deff,
+            resp_rate=resp_rate,
+        )
+
+    @experimental
+    def mde_prop(
+        self,
+        p0: Number | DomainScalarMap,
+        n: Number | DomainScalarMap,
+        *,
+        power: Number | DomainScalarMap = 0.80,
+        direction: Literal["upper", "lower"] = "upper",
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        method: Literal["wald", "score", "arcsine"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+    ) -> Power:
+        """
+        Minimum detectable effect of the test of H0: p = p0: the proportion nearest ``p0``,
+        on the ``direction`` side, that ``n`` selected units detect with probability ``power``.
+
+        The result is in ``.effect`` (the alternative is ``p0 + .effect``). With
+        ``method="wald"`` the variance is estimated under the alternative, so near 0 or 1 it
+        vanishes and the answer can sit very close to the boundary; ``"score"`` and
+        ``"arcsine"`` raise ``POWER_UNREACHABLE`` when ``n`` is too small. Raises as
+        ``mde_mean`` does.
+        """
+        return _mde_prop(
+            self,
+            p0,
+            n,
+            power=power,
+            direction=direction,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            method=method,
+            alpha=alpha,
+            deff=deff,
+            resp_rate=resp_rate,
+        )
+
+    @experimental
+    def mde_means(
+        self,
+        mu1: Number | DomainScalarMap,
+        sigma1: Number | DomainScalarMap,
+        n: Number | tuple[Number, Number] | DomainScalarMap,
+        *,
+        sigma2: Number | DomainScalarMap | None = None,
+        power: Number | DomainScalarMap = 0.80,
+        direction: Literal["upper", "lower"] = "upper",
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        alloc_ratio: Number | DomainScalarMap = 1.0,
+        method: Literal["wald"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+        rho: Number | DomainScalarMap = 0.0,
+        overlap: Number | DomainScalarMap = 0.0,
+    ) -> Power:
+        """
+        Minimum detectable difference ``mu2 - mu1`` between two means, given the groups'
+        sizes and ``power``. Sizes, ``deff``, ``rho``, ``overlap`` and the rest are as in
+        ``compare_means``; the result is in ``.effect``.
+        """
+        return _mde_means(
+            self,
+            mu1,
+            sigma1,
+            n,
+            sigma2=sigma2,
+            power=power,
+            direction=direction,
+            pop_size=pop_size,
+            two_sides=two_sides,
+            delta=delta,
+            alloc_ratio=alloc_ratio,
+            method=method,
+            alpha=alpha,
+            deff=deff,
+            resp_rate=resp_rate,
+            rho=rho,
+            overlap=overlap,
+        )
+
+    @experimental
+    def mde_props(
+        self,
+        p1: Number | DomainScalarMap,
+        n: Number | tuple[Number, Number] | DomainScalarMap,
+        *,
+        power: Number | DomainScalarMap = 0.80,
+        direction: Literal["upper", "lower"] = "upper",
+        pop_size: Number | DomainScalarMap | None = None,
+        two_sides: bool = True,
+        delta: Number | DomainScalarMap = 0.0,
+        alloc_ratio: Number | DomainScalarMap = 1.0,
+        method: Literal["wald"] = "wald",
+        alpha: Number | DomainScalarMap = 0.05,
+        var_mode: Literal["alt-props", "pooled-prop", "max-var"] = "alt-props",
+        deff: Number | DomainScalarMap = 1.0,
+        resp_rate: Number | DomainScalarMap = 1.0,
+        rho: Number | DomainScalarMap = 0.0,
+        overlap: Number | DomainScalarMap = 0.0,
+    ) -> Power:
+        """
+        Minimum detectable difference ``p2 - p1`` between two proportions, given the groups'
+        sizes and ``power``. As ``mde_prop`` for the search, and as ``compare_props`` for the
+        sizes and ``var_mode``.
+        """
+        return _mde_props(
+            self,
+            p1,
+            n,
+            power=power,
+            direction=direction,
             pop_size=pop_size,
             two_sides=two_sides,
             delta=delta,
