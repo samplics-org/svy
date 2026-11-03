@@ -2,7 +2,7 @@
 
 All notable changes to **svy-io**, high-speed reading and writing of survey files (SAS, SPSS, Stata) as Polars frames via ReadStat, are recorded here. Releases follow [Semantic Versioning](https://semver.org/); the layout follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Part of the [svy](../svy/CHANGELOG.md) project.
 
-## [Unreleased]
+## [0.9.0] — 2026-11-03
 
 ### Added
 
@@ -195,7 +195,8 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 First release tracked in this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.8.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-io-v0.9.0...HEAD
+[0.9.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.9.0
 [0.8.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.8.0
 [0.7.1]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.7.1
 [0.7.0]: https://github.com/samplics-org/svy/releases/tag/svy-io-v0.7.0

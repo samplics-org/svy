@@ -2726,7 +2726,7 @@ dev = [
 
 [[package]]
 name = "svy-io"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "packages/svy-io" }
 dependencies = [
     { name = "polars", extra = ["pyarrow"] },
