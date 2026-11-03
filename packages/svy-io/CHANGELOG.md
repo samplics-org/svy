@@ -4,6 +4,10 @@ All notable changes to **svy-io**, high-speed reading and writing of survey file
 
 ## [Unreleased]
 
+### Added
+
+- **`write_xpt` writes value labels** through `value_labels=` and `formats_path=`. XPT has no place for them, so each labelled column gets the format `<COL>F.` (`$<COL>F.` for text), and `formats_path` receives a v5 XPT dataset `FORMATS` in PROC FORMAT CNTLIN layout (`FMTNAME`, `START`, `END`, `LABEL`, `TYPE`), loaded in SAS with `proc format cntlin=`. Names are cut to 8 characters in v5 and 31 in v8 (ReadStat's limit) and numbered when they collide. Labels without `formats_path` raise `ValueError`.
+
 ### Fixed
 
 - **`write_sav` and `write_xpt` wrote a string value containing NUL (`\x00`) as an empty string.** They now raise `ValueError` naming each such column, as `write_dta` did. The native writers raise `INVALID_VALUE` naming the column and row.
