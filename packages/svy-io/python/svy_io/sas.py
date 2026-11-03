@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import re
 import tempfile
@@ -27,7 +28,7 @@ from .helpers import (
     _warn_catalog_error,
     _with_bad_string_hint,
 )
-from .metadata import normalize_user_missing
+from .metadata import normalize_user_missing, normalize_value_labels
 from .tagged_na import TaggedNA
 
 
@@ -771,6 +772,121 @@ def _sas_temporals(df: pl.DataFrame) -> tuple[pl.DataFrame, Dict[str, str]]:
     return (df.with_columns(exprs) if exprs else df), formats
 
 
+_XPT_MAX_STR_BYTES = 200
+_XPT_TEXT_DTYPES = (pl.String, pl.Categorical, pl.Enum)
+
+
+def _xpt_format_names(columns: Dict[str, bool], max_len: int) -> Dict[str, str]:
+    """``<COL>F`` per column (``$`` for text), unique on the bare name and at most ``max_len`` long."""
+    names: Dict[str, str] = {}
+    taken: set[str] = set()
+    for col, is_text in columns.items():
+        prefix = "$" if is_text else ""
+        room = max_len - len(prefix) - 1
+        # ReadStat rejects two-character format names such as XF.
+        base = col.upper() if len(col) > 1 else col.upper() + "_"
+        stem, n = base[:room], 1
+        while stem + "F" in taken:
+            n += 1
+            stem = base[: room - len(str(n))] + str(n)
+        taken.add(stem + "F")
+        names[col] = prefix + stem + "F"
+    return names
+
+
+def _cntlin_code(code: Any) -> str:
+    if isinstance(code, str):
+        return code
+    return str(code) if isinstance(code, int) else repr(code)
+
+
+def _xpt_value_labels(
+    df: pl.DataFrame, value_labels: Any, max_name_len: int
+) -> Tuple[Dict[str, str], pl.DataFrame]:
+    """Format name per labelled column, and the PROC FORMAT CNTLIN table defining them."""
+    labels = normalize_value_labels(value_labels, dict(df.schema))
+    unknown = sorted(set(labels) - set(df.columns))
+    if unknown:
+        raise ValueError(f"value_labels name columns that are not in the DataFrame: {unknown}")
+    is_text = {col: isinstance(df.schema[col], _XPT_TEXT_DTYPES) for col in labels}
+    unlabelable = sorted(
+        col for col in labels if not (is_text[col] or df.schema[col].is_numeric())
+    )
+    if unlabelable:
+        raise ValueError(
+            f"value labels apply to numeric and text columns only; these are not: {unlabelable}"
+        )
+    bad_codes = {
+        col: [k for k in mp if not isinstance(k, (int, float)) or not math.isfinite(k)]
+        for col, mp in labels.items()
+        if not is_text[col]
+    }
+    bad_codes = {col: ks for col, ks in bad_codes.items() if ks}
+    if bad_codes:
+        raise ValueError(
+            f"value label codes of numeric columns must be finite numbers: {bad_codes}"
+        )
+    _reject_nul(
+        "value labels",
+        ((col, text) for col, mp in labels.items() for k, lbl in mp.items() for text in (k, lbl)),
+    )
+    too_long = sorted(
+        col
+        for col, mp in labels.items()
+        if any(
+            max(len(_cntlin_code(k).encode()), len(lbl.encode())) > _XPT_MAX_STR_BYTES
+            for k, lbl in mp.items()
+        )
+    )
+    if too_long:
+        raise ValueError(
+            f"value label codes and texts must be at most {_XPT_MAX_STR_BYTES} bytes in XPT: "
+            f"{too_long}"
+        )
+
+    labelled = {col: is_text[col] for col, mp in labels.items() if mp}
+    names = _xpt_format_names(labelled, max_name_len)
+    rows = [
+        (names[col].lstrip("$"), _cntlin_code(k), lbl, "C" if text else "N")
+        for col, text in labelled.items()
+        for k, lbl in labels[col].items()
+    ]
+    fmtname, start, label, kind = (list(c) for c in zip(*rows)) if rows else ([], [], [], [])
+    cntlin = pl.DataFrame(
+        {"FMTNAME": fmtname, "START": start, "END": start, "LABEL": label, "TYPE": kind},
+        schema=dict.fromkeys(("FMTNAME", "START", "END", "LABEL", "TYPE"), pl.String),
+    )
+    return names, cntlin
+
+
+def _write_xpt_native(
+    df: pl.DataFrame,
+    path: str,
+    field_meta: Dict[str, Dict[str, str]],
+    *,
+    version: int,
+    name: str | None,
+    label: str | None,
+) -> None:
+    """The native writer reads each field's "label" and "format" from Arrow metadata."""
+    import pyarrow as pa
+    import pyarrow.ipc as pa_ipc
+
+    table = df.to_arrow()
+    fields = [
+        field.with_metadata(field_meta[field.name]) if field_meta.get(field.name) else field
+        for field in table.schema
+    ]
+    table = table.cast(pa.schema(fields))
+
+    sink = pa.BufferOutputStream()
+    with pa_ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    native.df_write_xpt_file(
+        sink.getvalue().to_pybytes(), path, version=version, name=name, label=label
+    )
+
+
 def write_xpt(
     df: pl.DataFrame,
     path: str | Path,
@@ -780,12 +896,22 @@ def write_xpt(
     label: str | None = None,
     adjust_tz: bool = True,
     var_labels: Dict[str, str] | None = None,
+    value_labels: Dict[str, dict] | List[dict] | None = None,
+    formats_path: str | Path | None = None,
 ) -> None:
     """
     Write a Polars DataFrame to SAS Transport (XPT) format (v5 or v8).
 
     Dates, datetimes and times are written as SAS numbers with DATE9.,
     DATETIME20. and TIME8. formats, so readers that honour formats get them back.
+
+    XPT holds no value labels: each labelled column gets the format ``<COL>F.``
+    (``$<COL>F.`` for text), and ``formats_path`` receives a v5 XPT dataset FORMATS
+    in PROC FORMAT CNTLIN layout. Load it in SAS before reading the data, or SAS
+    stops with "format not found" unless ``options nofmterr`` is set::
+
+        libname f xport "formats.xpt";
+        proc format cntlin=f.formats; run;
 
     Primary path: svyreadstat_rs.df_write_xpt_file (Arrow IPC).
     Fallback (if native fails or writes 0 bytes): pyreadstat.write_xport().
@@ -825,6 +951,17 @@ def write_xpt(
     _reject_nul("name and label", [("name", name), ("label", label)])
     _reject_nul("variable labels", (var_labels or {}).items())
     _reject_nul_values(df)
+    # ReadStat holds a format name in 32 bytes, NUL included.
+    label_formats, cntlin = _xpt_value_labels(df, value_labels, 8 if version == 5 else 31)
+    if formats_path is None and label_formats:
+        raise ValueError(
+            "XPT files hold no value labels; pass formats_path= to write them as a "
+            "PROC FORMAT CNTLIN dataset next to the data"
+        )
+    if formats_path is not None:
+        formats_path = os.fspath(formats_path)
+        if Path(formats_path).resolve() == Path(path).resolve():
+            raise ValueError("formats_path must differ from path")
 
     # --- XPT requires numeric == double; make that explicit ---
     int_cols = [
@@ -843,36 +980,17 @@ def write_xpt(
 
     df, formats = _sas_temporals(df)
 
-    # --- Try the native writer first ---
-    def _try_native(ipc_bytes: bytes) -> None:
-        # Raises RuntimeError on native error
-        native.df_write_xpt_file(
-            ipc_bytes,
-            path,
-            version=version,
-            name=name,
-            label=label,
-        )
-
-    # The native writer reads each field's "label" and "format" from Arrow metadata.
-    import pyarrow as pa
-    import pyarrow.ipc as pa_ipc
-
-    table = df.to_arrow()
-    fields = []
-    for field in table.schema:
+    field_meta: Dict[str, Dict[str, str]] = {}
+    for col in df.columns:
         meta = {}
-        if (var_labels or {}).get(field.name):
-            meta["label"] = var_labels[field.name]
-        if field.name in formats:
-            meta["format"] = formats[field.name]
-        fields.append(field.with_metadata(meta) if meta else field)
-    table = table.cast(pa.schema(fields))
-
-    sink = pa.BufferOutputStream()
-    with pa_ipc.new_file(sink, table.schema) as writer:
-        writer.write_table(table)
-    _try_native(sink.getvalue().to_pybytes())
+        if (var_labels or {}).get(col):
+            meta["label"] = var_labels[col]
+        if col in formats or col in label_formats:
+            meta["format"] = formats.get(col) or label_formats[col]
+        field_meta[col] = meta
+    _write_xpt_native(df, path, field_meta, version=version, name=name, label=label)
+    if formats_path is not None:
+        _write_xpt_native(cntlin, formats_path, {}, version=5, name="FORMATS", label=None)
 
     # If we got here without exception but the file is empty, the native layer didn't finalize.
     if os.path.exists(path) and os.stat(path).st_size == 0:
