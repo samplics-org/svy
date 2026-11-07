@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from scipy.optimize import brentq
-
 
 def smallest_effect(
     power_at: Callable[[float], float], *, target: float, lo: float, hi: float, steps: int = 400
@@ -16,6 +14,8 @@ def smallest_effect(
     ``power_at(lo)`` is below ``target``. The grid finds the first crossing, so a power that is
     not monotone in the effect still returns the smallest root; brentq then refines it.
     """
+    from scipy.optimize import brentq
+
     prev = lo
     for i in range(1, steps + 1):
         x = lo + (hi - lo) * i / steps

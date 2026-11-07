@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import math
 
-from scipy.stats import norm
-
 from svy.core.enumerations import OnePropTestMethod
 from svy.engine.size_and_power.size import _test_denominator, _zcrit_pair
 
@@ -57,6 +55,8 @@ def power_z(
     n_eff: float,
 ) -> float:
     """Power of the test at ``n_eff`` SRS-equivalent units; both tails when two-sided."""
+    from scipy.stats import norm
+
     sqrt_n = math.sqrt(n_eff) if math.isfinite(n_eff) else math.inf
     if two_sides and delta != 0.0:
         z = float(norm.isf(alpha))
