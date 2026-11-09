@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-pub(crate) struct GlmResult {
+pub struct GlmResult {
     pub params: Vec<f64>,
     pub cov_params: Vec<f64>,
     /// R svyglm's naive.cov, (X'WX)^-1 at the final beta, on the fit's mean-1 weight scale.
@@ -20,7 +20,7 @@ pub(crate) struct GlmResult {
 }
 
 /// Rows the fit drove to the boundary, and what is left to identify beta.
-pub(crate) struct Separation {
+pub struct Separation {
     /// Contributing rows whose fitted value the fit cannot tell from y.
     pub boundary_rows: usize,
     /// Row-major `sum_i w_i x_i x_i'` over the other rows; a coefficient outside its row space is not identified.

@@ -174,7 +174,7 @@ fn compute_svyranktest_single(
     frame_levels: Option<&[String]>,
 ) -> CResult<DataFrame> {
     let method = score_method
-        .map(RankScoreMethod::from_str)
+        .map(str::parse::<RankScoreMethod>)
         .transpose()?
         .unwrap_or(RankScoreMethod::Wilcoxon);
 

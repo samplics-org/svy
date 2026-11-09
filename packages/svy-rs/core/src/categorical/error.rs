@@ -6,7 +6,7 @@ use crate::estimation::error::EstimationError;
 use crate::regression::error::RegressionError;
 
 #[derive(Error, Debug)]
-pub(crate) enum CategoricalError {
+pub enum CategoricalError {
     #[error("Two-sample t-test requires exactly 2 groups, found {0}")]
     TwoGroups(usize),
 
@@ -26,7 +26,7 @@ pub(crate) enum CategoricalError {
     Polars(#[from] PolarsError),
 }
 
-pub(crate) type CResult<T> = Result<T, CategoricalError>;
+pub type CResult<T> = Result<T, CategoricalError>;
 
 impl Coded for CategoricalError {
     fn code(&self) -> &'static str {

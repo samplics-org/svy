@@ -5,7 +5,7 @@ use crate::errors::{Coded, KERNEL_INTERNAL};
 use crate::estimation::error::EstimationError;
 
 #[derive(Error, Debug)]
-pub(crate) enum RegressionError {
+pub enum RegressionError {
     #[error("Unsupported family: {0}")]
     UnsupportedFamily(String),
 

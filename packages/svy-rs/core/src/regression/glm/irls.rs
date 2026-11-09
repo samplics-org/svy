@@ -77,7 +77,7 @@ fn null_deviance_with_offset(
 
 /// One fit; only an estimated negative binomial theta leaves the plain IRLS path.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fit_one(
+pub fn fit_one(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
@@ -174,7 +174,7 @@ pub(crate) fn fit_glm(
 
 /// One `where=` domain fit; `fit_glm_by` would also fit the complement, and fail on a degenerate one.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fit_glm_where(
+pub fn fit_glm_where(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
@@ -216,7 +216,7 @@ pub(crate) fn fit_glm_where(
 
 /// One fit per level of `by_col` over the full design, as R's `svyglm(..., design = subset(d, ...))`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fit_glm_by(
+pub fn fit_glm_by(
     y: &Series,
     x_cols: Vec<Series>,
     weights: &Series,
@@ -296,7 +296,7 @@ pub(crate) fn fit_glm_by(
 
 /// Parallel replicate refits of the coefficients and separation, skipping the unused sandwich except for negbin.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fit_glm_reps(
+pub fn fit_glm_reps(
     y: &Series,
     x_cols: &[Series],
     rep_weights: &[Series],

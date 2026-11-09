@@ -46,7 +46,7 @@ pub enum EstimationError {
     Polars(#[from] PolarsError),
 }
 
-pub(crate) type EResult<T> = Result<T, EstimationError>;
+pub type EResult<T> = Result<T, EstimationError>;
 
 impl Coded for EstimationError {
     fn code(&self) -> &'static str {

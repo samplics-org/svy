@@ -734,7 +734,7 @@ impl AssocKind {
 // Kind-dispatching entry points
 // ---------------------------------------------------------------------------
 
-pub(crate) fn point_estimate_assoc(
+pub fn point_estimate_assoc(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -749,7 +749,7 @@ pub(crate) fn point_estimate_assoc(
     }
 }
 
-pub(crate) fn scores_assoc(
+pub fn scores_assoc(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -765,7 +765,7 @@ pub(crate) fn scores_assoc(
 }
 
 /// SRS reference variance for either association, over an optional domain.
-pub(crate) fn srs_variance_assoc_of(
+pub fn srs_variance_assoc_of(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,

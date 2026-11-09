@@ -13,7 +13,7 @@ pub(crate) type DomainReps = (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
 pub(crate) type LevelReps<L> = (Vec<L>, Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub(crate) enum VarianceCenter {
+pub enum VarianceCenter {
     /// Mean of the replicate estimates, the default in R `survey` and Stata.
     #[default]
     ReplicateMean,
@@ -22,7 +22,7 @@ pub(crate) enum VarianceCenter {
 }
 
 impl VarianceCenter {
-    pub(crate) fn parse(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "rep_mean" | "repmean" | "mean" | "average" | "replicates" => {
                 Some(VarianceCenter::ReplicateMean)
@@ -36,7 +36,7 @@ impl VarianceCenter {
 }
 
 /// `sum_r c_r (theta_r - center)^2` for every method, as R's `svrVar`; `FullSample` is mse=TRUE.
-pub(crate) fn variance_from_replicates(
+pub fn variance_from_replicates(
     theta_full: f64,
     theta_reps: &[f64],
     rep_coefs: &[f64],
@@ -64,7 +64,7 @@ pub(crate) fn variance_from_replicates(
 }
 
 /// k×k covariance of k estimates: `variance_from_replicates` applied cross-wise, same diagonal.
-pub(crate) fn covariance_from_replicates(
+pub fn covariance_from_replicates(
     theta_fulls: &[f64],
     theta_reps: &[Vec<f64>], // k estimates × n_reps
     rep_coefs: &[f64],
@@ -107,7 +107,7 @@ pub(crate) fn covariance_from_replicates(
 
 /// Replicate weights as a flat row-major n × R matrix, built by a cache-blocked parallel
 /// transpose: the naive strided write dominated the whole replication call.
-pub(crate) fn extract_rep_weights_matrix(
+pub fn extract_rep_weights_matrix(
     df: &DataFrame,
     rep_weight_cols: &[String],
 ) -> EResult<(Vec<f64>, usize, usize)> {
@@ -158,7 +158,7 @@ pub(crate) fn extract_rep_weights_matrix(
 }
 
 /// Full-sample and replicate means in one pass over the flat matrix.
-pub(crate) fn matrix_mean_estimates(
+pub fn matrix_mean_estimates(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64], // Flattened (n × R) row-major
@@ -203,7 +203,7 @@ pub(crate) fn matrix_mean_estimates(
 }
 
 /// `matrix_mean_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_mean_estimates_cols(
+pub fn matrix_mean_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -248,7 +248,7 @@ pub(crate) fn matrix_mean_estimates_cols(
     (theta_full, theta_reps)
 }
 
-pub(crate) fn matrix_total_estimates(
+pub fn matrix_total_estimates(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -276,7 +276,7 @@ pub(crate) fn matrix_total_estimates(
     (theta_full, theta_reps)
 }
 
-pub(crate) fn matrix_ratio_estimates(
+pub fn matrix_ratio_estimates(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -326,7 +326,7 @@ pub(crate) fn matrix_ratio_estimates(
 }
 
 /// `matrix_total_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_total_estimates_cols(
+pub fn matrix_total_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -360,7 +360,7 @@ pub(crate) fn matrix_total_estimates_cols(
 }
 
 /// `matrix_ratio_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_ratio_estimates_cols(
+pub fn matrix_ratio_estimates_cols(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -410,7 +410,7 @@ pub(crate) fn matrix_ratio_estimates_cols(
 // ============================================================================
 
 /// Index a categorical column to 0..K-1: `(indices, domain_names, n_domains)`.
-pub(crate) fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
+pub fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
     let mut map: HashMap<&str, u32> = HashMap::new();
     let mut names: Vec<String> = Vec::new();
     let mut next_idx = 0u32;
@@ -432,7 +432,7 @@ pub(crate) fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize
 }
 
 /// By-domain means: `(full[K], replicates[K][R], counts[K])`.
-pub(crate) fn matrix_mean_by_domain(
+pub fn matrix_mean_by_domain(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -490,7 +490,7 @@ pub(crate) fn matrix_mean_by_domain(
 }
 
 /// `matrix_mean_by_domain` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_mean_by_domain_cols(
+pub fn matrix_mean_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -552,7 +552,7 @@ pub(crate) fn matrix_mean_by_domain_cols(
 }
 
 /// `matrix_total_by_domain` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_total_by_domain_cols(
+pub fn matrix_total_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -595,7 +595,7 @@ pub(crate) fn matrix_total_by_domain_cols(
 }
 
 /// `matrix_ratio_by_domain` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_ratio_by_domain_cols(
+pub fn matrix_ratio_by_domain_cols(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -661,7 +661,7 @@ pub(crate) fn matrix_ratio_by_domain_cols(
     (theta_full, theta_reps, counts)
 }
 
-pub(crate) fn matrix_total_by_domain(
+pub fn matrix_total_by_domain(
     y: &[f64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -698,7 +698,7 @@ pub(crate) fn matrix_total_by_domain(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn matrix_ratio_by_domain(
+pub fn matrix_ratio_by_domain(
     y: &[f64],
     x: &[f64],
     full_weights: &[f64],
@@ -773,7 +773,7 @@ fn level_value(w_level: f64, w_total: f64, normalize: bool) -> f64 {
 }
 
 /// Proportions per integer level: `(levels, full[L], replicates[L][R])`.
-pub(crate) fn matrix_prop_estimates(
+pub fn matrix_prop_estimates(
     y: &[i64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -858,7 +858,7 @@ fn prop_level_index(y: &[i64]) -> (Vec<i64>, Vec<usize>) {
 }
 
 /// `matrix_prop_estimates` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_prop_estimates_cols(
+pub fn matrix_prop_estimates_cols(
     y: &[i64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -917,7 +917,7 @@ pub(crate) fn matrix_prop_estimates_cols(
 }
 
 /// `matrix_prop_estimates_str` from the replicate columns, bit-identical without the n×R matrix.
-pub(crate) fn matrix_prop_estimates_str_cols(
+pub fn matrix_prop_estimates_str_cols(
     y: &[String],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -989,7 +989,7 @@ pub(crate) fn matrix_prop_estimates_str_cols(
 
 /// Proportions per integer level and domain.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn matrix_prop_by_domain(
+pub fn matrix_prop_by_domain(
     y: &[i64],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -1079,7 +1079,7 @@ pub(crate) fn matrix_prop_by_domain(
 }
 
 /// Proportions per string level, sorted lexicographically: `(levels, full[L], reps[L][R])`.
-pub(crate) fn matrix_prop_estimates_str(
+pub fn matrix_prop_estimates_str(
     y: &[String],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -1147,7 +1147,7 @@ pub(crate) fn matrix_prop_estimates_str(
 
 /// Proportions per string level and domain: `(levels, full[D][L], reps[D][L][R], counts[D])`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn matrix_prop_by_domain_str(
+pub fn matrix_prop_by_domain_str(
     y: &[String],
     full_weights: &[f64],
     rep_weights: &[f64],
@@ -1334,7 +1334,7 @@ fn quantiles_in_order(
 }
 
 /// Full-sample and per-replicate quantiles: `(full[P], replicates[P][R])`, in `probs` order.
-pub(crate) fn quantile_estimates_cols(
+pub fn quantile_estimates_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],
@@ -1355,7 +1355,7 @@ pub(crate) fn quantile_estimates_cols(
 }
 
 /// By-domain quantiles: `(full[K][P], replicates[K][P][R], counts[K])`.
-pub(crate) fn quantile_by_domain_cols(
+pub fn quantile_by_domain_cols(
     y: &[f64],
     full_weights: &[f64],
     rep_cols: &[&[f64]],

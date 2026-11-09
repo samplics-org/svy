@@ -28,7 +28,7 @@ mod result;
 mod tests;
 
 pub(crate) use config::*;
-pub(crate) use helpers::*;
-pub(crate) use irls::*;
+pub use helpers::*;
+pub use irls::*;
 use numerics::*;
-pub(crate) use result::*;
+pub use result::*;

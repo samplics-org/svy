@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use crate::estimation::replication::{VarianceCenter, covariance_from_replicates};
 
-pub(crate) struct RepSpec {
+pub struct RepSpec {
     /// One weight vector per replicate.
     pub weights: Vec<Vec<f64>>,
     pub coefs: Vec<f64>,
@@ -20,7 +20,7 @@ pub(crate) struct RepSpec {
 }
 
 impl RepSpec {
-    pub(crate) fn from_frame(
+    pub fn from_frame(
         df: &DataFrame,
         cols: &[String],
         coefs: Vec<f64>,
@@ -102,7 +102,7 @@ impl RepSpec {
 }
 
 /// Cells of a tabulation with a replication covariance.
-pub(crate) struct RepCells {
+pub struct RepCells {
     pub proportions: Vec<f64>,
     pub prop_cov: Vec<Vec<f64>>,
     pub totals: Vec<f64>,
@@ -110,7 +110,7 @@ pub(crate) struct RepCells {
 }
 
 /// Cell proportions and totals per replicate; a row counts when in the domain and its key is in `levels`.
-pub(crate) fn replicate_cells(
+pub fn replicate_cells(
     y: &StringChunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,

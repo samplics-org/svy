@@ -3691,9 +3691,12 @@ name = "svy-core"
 version = "0.20.0"
 dependencies = [
  "approx",
+ "criterion",
  "faer",
  "ndarray",
+ "polars",
  "rayon",
+ "rustc-hash",
  "thiserror 2.0.21",
 ]
 
@@ -3701,18 +3704,13 @@ dependencies = [
 name = "svy_rs"
 version = "0.20.0"
 dependencies = [
- "approx",
- "criterion",
- "faer",
  "ndarray",
  "numpy",
  "polars",
  "pyo3",
  "pyo3-polars",
  "rayon",
- "rustc-hash",
  "svy-core",
- "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 //! Kernel errors Python can tell apart: a `ValueError` or `RuntimeError` carrying a `code`.
 
 use pyo3::prelude::*;
-pub(crate) use svy_core::errors::{Coded, KERNEL_INTERNAL};
+use svy_core::errors::Coded;
 
 pyo3::create_exception!(_internal, KernelValueError, pyo3::exceptions::PyValueError);
 pyo3::create_exception!(
