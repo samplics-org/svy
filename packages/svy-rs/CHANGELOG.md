@@ -12,7 +12,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Changed
 
-- The kernels move to `svy-core` (`core/`), a plain-Rust crate with no pyo3 or numpy, in one Cargo workspace with `svy_rs`, which keeps only the Python bindings. Moved so far: the `Coded` error contract, the RNG, and SRS/PPS selection. `PpsMethod` parses through `FromStr`. Python-facing names, signatures and errors are unchanged; `cargo test -p svy-core` needs no Python.
+- The kernels move to `svy-core` (`core/`), a plain-Rust crate with no pyo3 or numpy, in one Cargo workspace with `svy_rs`, which keeps only the Python bindings. Moved so far: the `Coded` error contract, the RNG, SRS/PPS selection, and the weighting kernels (adjustment, calibration, trimming, replicate weights). `PpsMethod` parses through `FromStr`. Python-facing names, signatures and errors are unchanged; `cargo test -p svy-core` needs no Python.
 
 ## [0.20.0] — 2026-10-28
 

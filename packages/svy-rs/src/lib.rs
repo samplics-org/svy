@@ -120,29 +120,26 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(categorical::api::ttest_rs, m)?)?;
     m.add_function(wrap_pyfunction!(categorical::api::ranktest_rs, m)?)?;
     m.add_function(wrap_pyfunction!(categorical::api::tabulate_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::rake, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::adjust_nr, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::normalize, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::poststratify, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::calibrate, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::calibrate_by_domain, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::calibrate_parallel, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::calibrate_bounded, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::rake, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::adjust_nr, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::normalize, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::poststratify, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::calibrate, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::calibrate_by_domain, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::calibrate_parallel, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::calibrate_bounded, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::calibrate_bounded_by_domain, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::trim_weights, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::trim_weights_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::brr_hadamard_size, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::create_brr_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::create_jk_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::create_bootstrap_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(
-        weighting::api::calibrate_bounded_by_domain,
+        weighting::create_poisson_bootstrap_wgts,
         m
     )?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::trim_weights, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::trim_weights_matrix, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::brr_hadamard_size, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::create_brr_wgts, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::create_jk_wgts, m)?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::create_bootstrap_wgts, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        weighting::api::create_poisson_bootstrap_wgts,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(weighting::api::create_sdr_wgts, m)?)?;
+    m.add_function(wrap_pyfunction!(weighting::create_sdr_wgts, m)?)?;
     m.add_function(wrap_pyfunction!(sampling::select_srs_rs, m)?)?;
     m.add_function(wrap_pyfunction!(sampling::select_pps_rs, m)?)?;
     m.add_function(wrap_pyfunction!(sampling::select_srs_batch_rs, m)?)?;

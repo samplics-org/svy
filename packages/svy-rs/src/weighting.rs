@@ -5,7 +5,7 @@ use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 use crate::errors::to_py_err;
-use crate::weighting::replication::ReplicationError;
+use svy_core::weighting::replication::ReplicationError;
 
 /// What `trim_weights` returns to Python.
 type TrimOutput = (
@@ -44,7 +44,7 @@ pub(crate) fn rake(
         .map(|x| x.as_array().to_owned())
         .collect();
 
-    let result = crate::weighting::raking::rake_impl(wgt_arr, &indices, &targets, tol, max_iter)
+    let result = svy_core::weighting::raking::rake_impl(wgt_arr, &indices, &targets, tol, max_iter)
         .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
@@ -63,7 +63,7 @@ pub(crate) fn adjust_nr(
     resp_status: PyReadonlyArray1<i64>,
     unknown_to_inelig: bool,
 ) -> PyResult<Py<PyArray2<f64>>> {
-    let result = crate::weighting::nonresponse::adjust_nr_impl(
+    let result = svy_core::weighting::nonresponse::adjust_nr_impl(
         wgts.as_array(),
         adj_class.as_array(),
         resp_status.as_array(),
@@ -89,9 +89,12 @@ pub(crate) fn normalize(
     let by = by_arr.map(|x| x.as_array().to_owned());
     let ctrl = control.map(|x| x.as_array().to_owned());
 
-    let result =
-        crate::weighting::normalization::normalize_impl(wgt.as_array(), by.as_ref(), ctrl.as_ref())
-            .map_err(|e| to_py_err(&e))?;
+    let result = svy_core::weighting::normalization::normalize_impl(
+        wgt.as_array(),
+        by.as_ref(),
+        ctrl.as_ref(),
+    )
+    .map_err(|e| to_py_err(&e))?;
 
     Ok(result.into_pyarray(py).to_owned().into())
 }
@@ -108,7 +111,7 @@ pub(crate) fn poststratify(
     control: PyReadonlyArray1<f64>,
 ) -> PyResult<Py<PyArray2<f64>>> {
     let ctrl = control.as_array().to_owned();
-    let result = crate::weighting::poststratification::poststratify_impl(
+    let result = svy_core::weighting::poststratification::poststratify_impl(
         wgt.as_array(),
         by_arr.as_array(),
         &ctrl,
@@ -135,7 +138,7 @@ pub(crate) fn calibrate(
     let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
     let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
 
-    let result = crate::weighting::calibration::calibrate_linear(
+    let result = svy_core::weighting::calibration::calibrate_linear(
         wgt.as_array(),
         x_matrix.as_array(),
         totals.as_array(),
@@ -166,7 +169,7 @@ pub(crate) fn calibrate_by_domain(
         .map(|(k, v)| (k, Array1::from(v)))
         .collect();
 
-    let result = crate::weighting::calibration::calibrate_by_domain(
+    let result = svy_core::weighting::calibration::calibrate_by_domain(
         wgt.as_array(),
         x_matrix.as_array(),
         domain.as_array(),
@@ -191,7 +194,7 @@ pub(crate) fn calibrate_parallel(
     let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
     let scale_view: Option<ArrayView1<f64>> = scale_owned.as_ref().map(|a| a.view());
 
-    let result = crate::weighting::calibration::calibrate_parallel(
+    let result = svy_core::weighting::calibration::calibrate_parallel(
         wgt.as_array(),
         x_matrix.as_array(),
         totals.as_array(),
@@ -226,14 +229,14 @@ pub(crate) fn calibrate_bounded(
     distance: &str,
 ) -> PyResult<BoundedOutput> {
     let distance =
-        crate::weighting::calibration::Distance::parse(distance).map_err(|e| to_py_err(&e))?;
+        svy_core::weighting::calibration::Distance::parse(distance).map_err(|e| to_py_err(&e))?;
     let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
-    let (w, fits) = crate::weighting::calibration::calibrate_bounded(
+    let (w, fits) = svy_core::weighting::calibration::calibrate_bounded(
         wgt.as_array(),
         x_matrix.as_array(),
         totals.as_array(),
         scale_owned.as_ref().map(|a| a.view()),
-        crate::weighting::calibration::BoundedSolve {
+        svy_core::weighting::calibration::BoundedSolve {
             lower,
             upper,
             tol,
@@ -277,19 +280,19 @@ pub(crate) fn calibrate_bounded_by_domain(
     distance: &str,
 ) -> PyResult<BoundedByDomainOutput> {
     let distance =
-        crate::weighting::calibration::Distance::parse(distance).map_err(|e| to_py_err(&e))?;
+        svy_core::weighting::calibration::Distance::parse(distance).map_err(|e| to_py_err(&e))?;
     let scale_owned: Option<Array1<f64>> = scale.map(|s| s.as_array().to_owned());
     let controls: std::collections::HashMap<i64, Array1<f64>> = controls_dict
         .into_iter()
         .map(|(k, v)| (k, Array1::from(v)))
         .collect();
-    let (w, domains, fits) = crate::weighting::calibration::calibrate_bounded_by_domain(
+    let (w, domains, fits) = svy_core::weighting::calibration::calibrate_bounded_by_domain(
         wgt.as_array(),
         x_matrix.as_array(),
         domain.as_array(),
         &controls,
         scale_owned.as_ref().map(|a| a.view()),
-        crate::weighting::calibration::BoundedSolve {
+        svy_core::weighting::calibration::BoundedSolve {
             lower,
             upper,
             tol,
@@ -317,8 +320,8 @@ pub(crate) fn calibrate_bounded_by_domain(
 /// BRR Hadamard order (max distinct replicates) for `n_strata`, so Python validates n_reps first.
 #[pyfunction]
 pub(crate) fn brr_hadamard_size(n_strata: usize) -> PyResult<usize> {
-    let (_h, size) =
-        crate::weighting::replication::get_hadamard_for_brr(n_strata).map_err(|e| to_py_err(&e))?;
+    let (_h, size) = svy_core::weighting::replication::get_hadamard_for_brr(n_strata)
+        .map_err(|e| to_py_err(&e))?;
     Ok(size)
 }
 
@@ -333,7 +336,7 @@ pub(crate) fn create_brr_wgts(
     fay_coef: f64,
     seed: Option<u64>,
 ) -> PyResult<(Py<PyArray2<f64>>, f64)> {
-    let (result, df) = crate::weighting::replication::create_brr_weights(
+    let (result, df) = svy_core::weighting::replication::create_brr_weights(
         wgt.as_array(),
         stratum.as_array(),
         psu.as_array(),
@@ -357,7 +360,7 @@ pub(crate) fn create_jk_wgts(
     seed: Option<u64>,
 ) -> PyResult<(Py<PyArray2<f64>>, f64, Vec<f64>)> {
     let stratum_view = stratum.as_ref().map(|s| s.as_array());
-    let (result, df, rscales) = crate::weighting::replication::create_jk_weights(
+    let (result, df, rscales) = svy_core::weighting::replication::create_jk_weights(
         wgt.as_array(),
         stratum_view,
         psu.as_array(),
@@ -382,7 +385,7 @@ pub(crate) fn create_bootstrap_wgts(
     let stratum_view = stratum.as_ref().map(|s| s.as_array());
     let seed = seed.ok_or_else(|| to_py_err(&ReplicationError::MissingSeed))?;
 
-    let (result, df) = crate::weighting::replication::create_bootstrap_weights(
+    let (result, df) = svy_core::weighting::replication::create_bootstrap_weights(
         wgt.as_array(),
         stratum_view,
         psu.as_array(),
@@ -404,7 +407,7 @@ pub(crate) fn create_poisson_bootstrap_wgts(
 ) -> PyResult<(Py<PyArray2<f64>>, f64)> {
     let seed = seed.ok_or_else(|| to_py_err(&ReplicationError::MissingSeed))?;
 
-    let (result, df) = crate::weighting::replication::create_poisson_bootstrap_weights(
+    let (result, df) = svy_core::weighting::replication::create_poisson_bootstrap_weights(
         wgt.as_array(),
         n_reps,
         seed,
@@ -426,7 +429,7 @@ pub(crate) fn create_sdr_wgts(
     let stratum_view = stratum.as_ref().map(|s| s.as_array());
     let order_view = order.as_ref().map(|o| o.as_array());
 
-    let (result, df) = crate::weighting::replication::create_sdr_weights(
+    let (result, df) = svy_core::weighting::replication::create_sdr_weights(
         wgt.as_array(),
         stratum_view,
         order_view,
@@ -452,7 +455,7 @@ pub(crate) fn trim_weights(
     max_iter: usize,
     tol: f64,
 ) -> PyResult<TrimOutput> {
-    let out = crate::weighting::trimming::trim_impl(
+    let out = svy_core::weighting::trimming::trim_impl(
         weights.as_array(),
         upper,
         lower,
@@ -486,7 +489,7 @@ pub(crate) fn trim_weights_matrix(
     max_iter: usize,
     tol: f64,
 ) -> PyResult<Py<PyArray2<f64>>> {
-    let out = crate::weighting::trimming::trim_matrix_impl(
+    let out = svy_core::weighting::trimming::trim_matrix_impl(
         weights.as_array(),
         upper,
         lower,
