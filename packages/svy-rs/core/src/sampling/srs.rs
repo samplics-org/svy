@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 /// Selected rows, their hits and inclusion probabilities.
-pub(crate) type SrsDraw = (Vec<i64>, Vec<i64>, Vec<f64>);
+pub type SrsDraw = (Vec<i64>, Vec<i64>, Vec<f64>);
 
 #[derive(Error, Debug, Clone)]
-pub(crate) enum SamplingError {
+pub enum SamplingError {
     #[error("Cannot sample from an empty frame")]
     EmptyFrame,
 
@@ -63,7 +63,7 @@ pub(crate) fn check_n_map<V>(map: &HashMap<i64, usize>, strata: &HashMap<i64, V>
 }
 
 #[derive(Clone)]
-pub(crate) enum SrsN {
+pub enum SrsN {
     Scalar(usize),
     PerStratum(HashMap<i64, usize>),
 }
@@ -72,7 +72,7 @@ pub(crate) enum SrsN {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub(crate) fn select_srs(
+pub fn select_srs(
     frame: &[i64],
     n: SrsN,
     stratum: Option<&[i64]>,

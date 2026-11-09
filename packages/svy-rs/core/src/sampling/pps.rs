@@ -6,10 +6,10 @@ use crate::sampling::srs::{SamplingError, check_n_map};
 use std::collections::HashMap;
 
 /// Selected rows, their hits, inclusion probabilities and certainty flags.
-pub(crate) type PpsDraw = (Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>);
+pub type PpsDraw = (Vec<i64>, Vec<i64>, Vec<f64>, Vec<bool>);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum PpsMethod {
+pub enum PpsMethod {
     Sys,
     Wr,
     Brewer,
@@ -17,30 +17,32 @@ pub(crate) enum PpsMethod {
     Rs,
 }
 
-impl PpsMethod {
-    pub(crate) fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for PpsMethod {
+    type Err = SamplingError;
+
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             s if s.eq_ignore_ascii_case("sys") || s.eq_ignore_ascii_case("systematic") => {
-                Some(PpsMethod::Sys)
+                Ok(PpsMethod::Sys)
             }
             s if s.eq_ignore_ascii_case("wr") || s.eq_ignore_ascii_case("with_replacement") => {
-                Some(PpsMethod::Wr)
+                Ok(PpsMethod::Wr)
             }
-            s if s.eq_ignore_ascii_case("brewer") => Some(PpsMethod::Brewer),
-            s if s.eq_ignore_ascii_case("murphy") => Some(PpsMethod::Murphy),
+            s if s.eq_ignore_ascii_case("brewer") => Ok(PpsMethod::Brewer),
+            s if s.eq_ignore_ascii_case("murphy") => Ok(PpsMethod::Murphy),
             s if s.eq_ignore_ascii_case("rs")
                 || s.eq_ignore_ascii_case("rao_sampford")
                 || s.eq_ignore_ascii_case("sampford") =>
             {
-                Some(PpsMethod::Rs)
+                Ok(PpsMethod::Rs)
             }
-            _ => None,
+            _ => Err(SamplingError::UnknownMethod(s.to_string())),
         }
     }
 }
 
 #[derive(Clone)]
-pub(crate) enum PpsN {
+pub enum PpsN {
     Scalar(usize),
     PerStratum(HashMap<i64, usize>),
 }
@@ -49,7 +51,7 @@ pub(crate) enum PpsN {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub(crate) fn select_pps(
+pub fn select_pps(
     frame: &[i64],
     n: PpsN,
     mos: &[f64],

@@ -10,6 +10,10 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 - `calibrate_bounded` and `calibrate_bounded_by_domain` take `distance="raking"`: g = clamp(exp(u)), with the derivative zero exactly where g is clamped (R's `cal.raking` cuts at `lower - 1`, `upper - 1` and stalls feasible problems), a small Levenberg–Marquardt term so rows held at a bound can move back, and a backtracking search on the dual when the full Newton step does not shrink the misfit.
 - `calibrate_bounded` and `calibrate_bounded_by_domain`: linear calibration with g held in `[lower, upper]`, a port of R survey's `grake` with `cal.linear` (Newton steps on `MASS::ginv`, R's stopping rule and pre-scaling). Each returns the weights and, per column (and domain), the largest `|misfit| / (1 + |t|)` and the Newton steps taken; a column that did not converge holds the last iterate.
 
+### Changed
+
+- The kernels move to `svy-core` (`core/`), a plain-Rust crate with no pyo3 or numpy, in one Cargo workspace with `svy_rs`, which keeps only the Python bindings. Moved so far: the `Coded` error contract, the RNG, and SRS/PPS selection. `PpsMethod` parses through `FromStr`. Python-facing names, signatures and errors are unchanged; `cargo test -p svy-core` needs no Python.
+
 ## [0.20.0] — 2026-10-28
 
 ### Added

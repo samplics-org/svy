@@ -6,7 +6,6 @@ mod categorical;
 mod errors;
 mod estimation;
 mod regression;
-mod rng;
 mod sampling;
 #[cfg(test)]
 mod test_fixtures;
@@ -144,9 +143,9 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(weighting::api::create_sdr_wgts, m)?)?;
-    m.add_function(wrap_pyfunction!(sampling::api::select_srs_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(sampling::api::select_pps_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(sampling::api::select_srs_batch_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(sampling::api::select_pps_batch_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(sampling::select_srs_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(sampling::select_pps_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(sampling::select_srs_batch_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(sampling::select_pps_batch_rs, m)?)?;
     Ok(())
 }

@@ -1,0 +1,12 @@
+[package]
+name = "svy-core"
+version = "0.20.0"
+edition = "2024"
+rust-version = "1.91"
+repository = "https://github.com/samplics-org/svy"
+homepage = "https://svylab.com/docs/svy"
+publish = false
+
+[dependencies]
+rayon = "1.12"
+thiserror = "2.0"

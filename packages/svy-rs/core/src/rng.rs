@@ -2,13 +2,13 @@
 
 /// xoshiro256** generator: a given seed always yields the same stream, so draws are reproducible.
 #[derive(Clone)]
-pub(crate) struct Rng {
+pub struct Rng {
     state: [u64; 4],
 }
 
 impl Rng {
     /// Create a new RNG from a 64-bit seed using SplitMix64 initialisation.
-    pub(crate) fn new(seed: u64) -> Self {
+    pub fn new(seed: u64) -> Self {
         let mut sm = seed;
         let mut state = [0u64; 4];
         for s in &mut state {
@@ -21,7 +21,7 @@ impl Rng {
         Rng { state }
     }
 
-    pub(crate) fn next_u64(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         let result = self.state[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
         let t = self.state[1] << 17;
         self.state[2] ^= self.state[0];
@@ -34,7 +34,7 @@ impl Rng {
     }
 
     /// Uniform integer in [0, n) without modulo bias (Lemire's nearly-divisionless method).
-    pub(crate) fn next_index(&mut self, n: usize) -> usize {
+    pub fn next_index(&mut self, n: usize) -> usize {
         debug_assert!(n > 0, "next_index requires n > 0");
         let n = n as u64;
         let mut x = self.next_u64();
@@ -58,7 +58,7 @@ impl Rng {
     }
 
     /// Fisher-Yates shuffle.
-    pub(crate) fn shuffle<T>(&mut self, slice: &mut [T]) {
+    pub fn shuffle<T>(&mut self, slice: &mut [T]) {
         for i in (1..slice.len()).rev() {
             let j = self.next_index(i + 1);
             slice.swap(i, j);

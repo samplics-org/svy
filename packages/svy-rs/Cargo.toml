@@ -9,6 +9,11 @@ rust-version = "1.91"
 repository = "https://github.com/samplics-org/svy"
 homepage = "https://svylab.com/docs/svy"
 
+# svy-core holds the kernels in plain Rust; this crate is only their Python binding.
+[workspace]
+members = ["core"]
+# Plain `cargo test`/`clippy` here (CI, `make test-svy-rs-cargo`) cover both crates.
+default-members = [".", "core"]
 
 [lib]
 name = "_internal"
@@ -18,6 +23,7 @@ name = "_internal"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+svy-core = { path = "core" }
 # `extension-module` is intentionally NOT listed here — it is pulled in only
 # through this crate's own `extension-module` feature (default-on, and also
 # passed explicitly by maturin via pyproject.toml). Keeping it off the direct
