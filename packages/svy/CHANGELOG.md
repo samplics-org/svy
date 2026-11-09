@@ -6,8 +6,13 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+## [0.37.0] — 2026-11-09
+
+Requires [`svy-rs`](../svy-rs/CHANGELOG.md) 0.21.0, which carries the kernel changes below.
+
 ### Added
 
+- **`Power().mde_mean`, `mde_prop`, `mde_means` and `mde_props` give the minimum detectable effect.** Given `n` and `power`, they return the smallest effect on the `direction="upper"` or `"lower"` side of the null that the test detects, in `.effect` (alternative = null + effect); `n`, `deff`, `resp_rate`, `pop_size`, `method`, `var_mode`, `rho`, `overlap` and per-stratum maps mean what they mean in the power methods, and the power at the returned effect is `power`. `power` must exceed `alpha`; an equivalence test has no minimum effect (`INVALID_VALUE`); `POWER_UNREACHABLE` when no proportion reaches the power. Experimental.
 - **Breaking: `rake(bounds=)` holds g within the bounds instead of checking it afterwards.** Raking used to run unconstrained and raise `BOUNDS_EXCEEDED` when a factor fell outside; it now solves the raking distance with g held in `(lo, hi)`, as R's `calibrate(calfun="raking", bounds=)`, in the main and every replicate weight. Margins no g within the bounds can meet stop at `max_iter` with `WEIGHTING_NOT_CONVERGED` (or keep the last iterate with `on_nonconvergence="warn"`). The solve takes R's Newton step when it helps and otherwise a damped one, so it reaches R's weights wherever R converges and also converges where R's step cycles, e.g. bounds that do not even bind. A bounded rake is recorded for variance as R records it, a GREG calibration on the margins' indicator matrix (with `shares`, on their composition only); Taylor SEs match R. `bounds=` with `trimming=` raises `NOT_SUPPORTED`; `tol` and `max_iter` are validated. The `BOUNDS_EXCEEDED` code is removed: nothing raises it any more.
 - **Bounded calibration.** `calibrate(bounds=(lo, hi))` and `calibrate_matrix(bounds=)` hold the factor g = new/old weight within the bounds during the solve, as R survey's `calibrate(bounds=)` with the linear distance (`grake`), instead of raising `NOT_SUPPORTED`. New `tol=` (default `1e-7`, R's `epsilon`: every control within `|achieved - target| / (1 + |target|)`) and `max_iter=` (default `50`, R's `maxit`) apply with bounds. A solve that stops short raises `WEIGHTING_NOT_CONVERGED` naming the domains or replicate weights, or with `on_nonconvergence="warn"` keeps the last iterate, as R's `force=TRUE`. Weights far below the controls are rescaled first, as in R. Weights, Taylor SEs and replicate weights match R. `bounds=` with `trimming=` raises `NOT_SUPPORTED`; no side set keeps the closed form.
 - **A saved estimate keeps its covariance (`svy-result/0.13`).** `to_dict`/`to_json` write `covariance` (rows and columns in `estimates` order, so the variance of a difference of two domains is `c[i,i] + c[j,j] - 2 c[i,j]`) and `covariance_filled`, which is false when each row was estimated alone, as `median(by=)` does, and the off-diagonals are zeros rather than a covariance. Older payloads decode with `None`.
@@ -27,6 +32,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **`import svy` no longer loads `scipy.stats` or `scipy.optimize`**, which the size and power code imported at module level; they load on the first call that needs them. `import svy` takes about half the time it did.
 - **Tables, t-tests and rank tests export their levels as estimates do.** `Table.to_polars()` gives each level in its column's type (Float64 `1.0`, Boolean `true`, no longer the text `"1"`, `"true"`) with a `<var>_label` column beside each labelled variable; t-tests and rank tests by domain add one for each labelled `by` variable (`by_label` with `tidy=False`). `to_polars(use_labels=)` switches them off: on `Table` it defaults like `Estimate`, on t-tests and rank tests it defaults to on and also drops the group's label column. A name taken by a variable raises `LABEL_COLUMN_CLASH`, as for estimates.
 - **Taylor quantiles and medians are about twice as fast.** Their confidence limits invert the weighted CDF the kernel estimated from, instead of filtering, sorting and summing the data again in Python; results are unchanged. Needs svy-rs with `return_cdf`.
+- **GLM fits are about three times as fast, replicate quantiles and medians about 40% faster, and replicate estimates by domain 15–30% faster.** Estimates are unchanged except GLM fits, whose sums run in a different order: estimates and SEs can move in the last digits (at most 5e-14 in the cases compared).
 
 ### Fixed
 
@@ -39,7 +45,6 @@ Requires [`svy-rs`](../svy-rs/CHANGELOG.md) 0.20.0 and [`svy-io`](../svy-io/CHAN
 
 ### Added
 
-- **`Power().mde_mean`, `mde_prop`, `mde_means` and `mde_props` give the minimum detectable effect.** Given `n` and `power`, they return the smallest effect on the `direction="upper"` or `"lower"` side of the null that the test detects, in `.effect` (alternative = null + effect); `n`, `deff`, `resp_rate`, `pop_size`, `method`, `var_mode`, `rho`, `overlap` and per-stratum maps mean what they mean in the power methods, and the power at the returned effect is `power`. `power` must exceed `alpha`; an equivalence test has no minimum effect (`INVALID_VALUE`); `POWER_UNREACHABLE` when no proportion reaches the power. Experimental.
 - **`Power().compare_means` and `compare_props` give the power of the two-group comparisons.** `n` is group 1's size (group 2 gets `alloc_ratio * n`) or the `(n1, n2)` pair `SampleSize().compare_*` returns; `deff`, `resp_rate` and `pop_size` take one value or a `(group 1, group 2)` pair; `var_mode`, `rho`, `overlap`, `delta` and `two_sides` mean what they mean in sizing, and full overlap reproduces a paired test (Stata `power pairedmeans`). Experimental, like the rest of `Power`.
 - **`SampleSize.test_mean` and `test_prop` size a one-sample test, and the new experimental `svy.Power` gives its power given n.** `test_mean(mu0, mu1, sigma)` and `test_prop(p0, p1, method="wald"|"score"|"arcsine")` follow `compare_*` (`two_sides`, `delta` margin or equivalence, `alpha`, `power`, `deff`, `pop_size`, `resp_rate`, per-stratum mappings, `INFEASIBLE_DESIGN` when the effect does not clear the margin); `Power().test_mean(..., n=)` and `test_prop` invert the same deff, FPC and nonresponse steps exactly, count both tails, and return `.power`, `.effect`, `.rows` and `to_polars()`. z tests only; matches R and Stata `power onemean ..., knownsd` / `power oneproportion`. New codes `SIZE_METHOD_MARGIN` and `POWER_N_EXCEEDS_POPULATION`; new `svy.enums.OnePropTestMethod`.
 - **`deff=` works with `method="replication"`.** `mean`, `total` (also `as_factor=True`), `prop`, `ratio`, `corr` and `cov`, with `by=` and `where=`, report the replicate variance over the same SRS reference as Taylor (`"wor"` = R `deff=TRUE`, `"wr"` = `deff="replace"`); it was silently `None`. Mean, total and proportions match R `svrepdesign` to 1e-8. The ratio's deff uses the replicate variance svy reports, where R's replicate `svyratio` deffs the linearized total. `"wor"` raises `DEFF_NOT_COMPUTABLE` under rescaled weights, as on Taylor.
@@ -1351,7 +1356,8 @@ Builds on [`svy-rs`](../svy-rs/CHANGELOG.md) 0.11.0 and [`svy-io`](../svy-io/CHA
 
 First release tracked in this changelog. For the history prior to 0.18.2, see the [Git tags](https://github.com/samplics-org/svy/tags) and [GitHub Releases](https://github.com/samplics-org/svy/releases).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.36.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-v0.37.0...HEAD
+[0.37.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.37.0
 [0.36.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.36.0
 [0.35.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.35.0
 [0.34.0]: https://github.com/samplics-org/svy/releases/tag/svy-v0.34.0
