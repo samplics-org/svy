@@ -2255,6 +2255,13 @@ fn df_shared_psu_codes(active: &[bool], str_idx: &[u32], n_strata: u32, psu_idx:
 
 /// Woodruff `(estimate, var_p, se_p)` per prob, sorting once; all-NaN where undefined.
 /// With `domain_mask`, scores outside are zero, so the variance still spans the full design.
+/// Sorted values and their normalised weighted CDF, as the Woodruff limits invert it.
+pub type WeightedCdf = (Vec<f64>, Vec<f64>);
+
+/// `(estimate, var, se)` per probability.
+pub(crate) type WoodruffRows = Vec<(f64, f64, f64)>;
+
+/// `(estimate, var, se)` per probability, with the CDF they came from (`None` without weight).
 pub(crate) fn quantiles_woodruff(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -2263,16 +2270,16 @@ pub(crate) fn quantiles_woodruff(
     design: &TaylorDesign,
     probs: &[f64],
     quantile_method: SvyQuantileMethod,
-) -> EResult<Vec<(f64, f64, f64)>> {
+) -> EResult<(WoodruffRows, Option<WeightedCdf>)> {
     let nan_rows = || vec![(f64::NAN, f64::NAN, f64::NAN); probs.len()];
 
     let Some((y_sorted, cdf, sum_w)) = sorted_weighted_cdf(quantile_pairs(y, weights, domain_mask))
     else {
-        return Ok(nan_rows());
+        return Ok((nan_rows(), None));
     };
     let active = design.domain_rows(y.len(), rows, domain_mask);
 
-    Ok(probs
+    let estimates = probs
         .iter()
         .map(|&p| {
             let q = weighted_quantile(&y_sorted, &cdf, p, quantile_method);
@@ -2284,7 +2291,8 @@ pub(crate) fn quantiles_woodruff(
             let var_p = taylor_variance_apply_in(&scores, design, active.as_deref());
             (q, var_p, var_p.max(0.0).sqrt())
         })
-        .collect())
+        .collect();
+    Ok((estimates, Some((y_sorted, cdf))))
 }
 
 // ============================================================================
