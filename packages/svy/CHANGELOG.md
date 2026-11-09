@@ -15,6 +15,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **Tabulation and `by=` estimates do less per call.** `tabulate` keeps the design keys the sample already holds instead of rebuilding them on every call (about 30% faster), and estimation builds its `by` key as text directly instead of as a categorical it then cast back (`mean(by=)` about 25% faster). Results are unchanged.
 - **Breaking: every result's `to_polars()` gives the full record of each row.** Columns run identity, levels, numbers, settings, so a frame reads without its result:
   - identity first: `y_var` (and `x_var` for a ratio or a pair, `group_var` for a test, `term` for a GLM), on every frame; correlation pairs' `y`/`x` and an estimate list's leading `y`/`x` become `y_var`/`x_var`;
   - numbers named alike: `est, se, lci, uci, cv`, then the test as `t, df, p_value` or `f, df_num, df_den, p_value`, then `n`. GLM `estimate, std_err, conf_low, conf_high, statistic` become `est, se, lci, uci, t` (`odds_ratio` and the other ratio names stay with `exponentiate=True`); margins' `margin`, a prediction's `yhat` and a t-test's or rank test's `diff` become `est`; the k-sample rank test's `chisq, f_stat, ndf, ddf` become `f, df_num, df_den`; `df` is Float64 everywhere;

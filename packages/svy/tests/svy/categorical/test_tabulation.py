@@ -527,3 +527,45 @@ def test_units_count_ci_uses_design_df_t(df_basic, mock_design):
             assert (cell.est - cell.lci) / cell.se == pytest.approx(t_crit, rel=1e-9)
             checked += 1
     assert checked > 0
+
+
+_EDIT_DATA = pl.DataFrame(
+    {
+        "y": ["a", "b", "a", "a", "b", "b", "a", "b", "b", "a", "a", "b"],
+        "w": [1.0, 2.0, 1.5, 3.0, 2.5, 1.0, 2.0, 1.5, 3.0, 1.0, 2.0, 2.5],
+        "st1": ["s1"] * 6 + ["s2"] * 6,
+        "st2": ["t1", "t2"] * 6,
+        "psu": [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6],
+        "psu2": [1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6],
+    }
+)
+
+
+def _edited_and_built(edit):
+    """A sample edited after construction, and one built with the edited design and data."""
+    design = Design(stratum="st1", psu="psu", wgt="w")
+    start = Sample(data=_EDIT_DATA, design=design)
+    if edit == "update_design":
+        built = Sample(data=_EDIT_DATA, design=Design(stratum="st2", psu="psu", wgt="w"))
+        return start.update_design(stratum="st2"), built
+    if edit == "rename":
+        data = _EDIT_DATA.rename({"st1": "strat"})
+        built = Sample(data=data, design=Design(stratum="strat", psu="psu", wgt="w"))
+        return start.wrangling.rename_columns({"st1": "strat"}), built
+    data = _EDIT_DATA.with_columns(pl.col("psu2").alias("psu"))
+    return start.wrangling.mutate({"psu": pl.col("psu2")}), Sample(data=data, design=design)
+
+
+@pytest.mark.parametrize(
+    ("edit", "changes_design"),
+    [("update_design", True), ("rename", False), ("overwrite_psu", True)],
+)
+def test_tabulate_after_a_design_edit_matches_a_sample_built_with_it(edit, changes_design):
+    from polars.testing import assert_frame_equal
+
+    edited, built = _edited_and_built(edit)
+    got = edited.categorical.tabulate("y").to_polars()
+    assert_frame_equal(got, built.categorical.tabulate("y").to_polars())
+    # A new design must change the table, or the comparison could not catch stale design keys.
+    unedited = Sample(data=_EDIT_DATA, design=Design(stratum="st1", psu="psu", wgt="w"))
+    assert got.equals(unedited.categorical.tabulate("y").to_polars()) != changes_design
