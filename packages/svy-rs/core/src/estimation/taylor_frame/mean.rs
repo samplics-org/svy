@@ -285,16 +285,15 @@ pub fn compute_mean_grouped(
                     let active =
                         design.domain_rows(weights.len(), rows.as_ref(), Some(&domain_mask));
                     let n_domain = active_count(weights, Some(&domain_mask));
-                    let Ok(estimate) = point_estimate_mean_domain(y, weights, &domain_mask) else {
+                    let Some((estimate, scores_arr, srs_var)) =
+                        mean_domain_parts(y, weights, &domain_mask, srs)?
+                    else {
                         let nan = f64::NAN;
                         return Ok((group, nan, nan, nan, n_domain, nan, vec![0.0; y.len()]));
                     };
-                    let scores = scores_mean_domain(y, weights, &domain_mask)?;
-                    let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                     let variance =
                         taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                     let se = variance.max(0.0).sqrt();
-                    let srs_var = srs_variance_mean_domain(y, weights, &domain_mask, srs)?;
                     let deff = if srs_var > 0.0 {
                         variance / srs_var
                     } else {
