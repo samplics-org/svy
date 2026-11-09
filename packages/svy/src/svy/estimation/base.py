@@ -1096,8 +1096,7 @@ class Estimation:
         y_name,
         alpha,
         by_col,
-        data,
-        weight_col,
+        cdfs,
         q_method: _QuantileMethod = _QuantileMethod.HIGHER,
         set_prob: bool = True,
     ) -> list[ParamEst]:
@@ -1108,7 +1107,8 @@ class Estimation:
         at ``F(q̂) ± t·se_p``, and the reported SE is the back-solved half-width.
         This is R's ``svyquantile`` (``interval.type="mean"``); a limit whose
         probability falls outside [0, 1] is NaN, and so is the SE.
-        The per-domain CDF is built once and reused across probabilities.
+        ``cdfs`` maps each domain (``None`` when ungrouped) to the sorted values
+        and CDF the kernel estimated from, or ``None`` when it had no weight.
 
         ``set_prob=False`` leaves ``ParamEst.prob`` unset, which is what the
         median path wants — it reports as MEDIAN, not as a quantile at 0.5.
@@ -1124,27 +1124,8 @@ class Estimation:
 
         if by_col and by_col in result_df.columns:
             domain_vals = result_df[by_col].to_list()
-            unique_domains = list(dict.fromkeys(domain_vals))
         else:
             domain_vals = [None] * n_rows
-            unique_domains = [None]
-
-        domain_cache: dict = {}
-        for dv in unique_domains:
-            sub = (
-                data.filter(pl.col(by_col) == dv).select([y_name, weight_col]).drop_nulls()
-                if dv is not None
-                else data.select([y_name, weight_col]).drop_nulls()
-            )
-            if sub.height == 0:
-                domain_cache[dv] = None
-                continue
-            sub_sorted = sub.sort(y_name)
-            y_vals = sub_sorted[y_name].to_numpy()
-            w_vals = sub_sorted[weight_col].to_numpy()
-            cumsum = np.cumsum(w_vals)
-            total = cumsum[-1]
-            domain_cache[dv] = (y_vals, cumsum / total) if total > 0 else None
 
         est_vals = result_df["est"].to_list()
         se_vals = result_df["se"].to_list()
@@ -1161,7 +1142,7 @@ class Estimation:
             p = float(probs[i])
 
             t_crit = self._t_crit(alpha, df_val)
-            cached = domain_cache.get(dv)
+            cached = cdfs.get(dv)
             if df_val <= 0 or cached is None:
                 # No residual df (issue #96) or an empty domain: the interval
                 # is undefined. Skip the CDF inversion, whose probability
@@ -1218,13 +1199,12 @@ class Estimation:
         y_name,
         alpha,
         by_col,
-        data,
-        weight_col,
+        cdfs,
         q_method: _QuantileMethod = _QuantileMethod.HIGHER,
     ) -> list[ParamEst]:
         """The p = 0.5 case, reported as a median rather than as a quantile."""
         return self._quantile_result_to_param_est(
-            result_df, y_name, alpha, by_col, data, weight_col, q_method, set_prob=False
+            result_df, y_name, alpha, by_col, cdfs, q_method, set_prob=False
         )
 
     def _replicate_quantile_result_to_param_est(

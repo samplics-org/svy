@@ -151,6 +151,45 @@ def test_linear_quantile_interpolates_into_a_tie():
     assert result["est"][0] == pytest.approx(1.5, rel=1e-15)
 
 
+# Sorted y = [1, 2, 2, 3]; the tied 2s keep row order, so w = [2, 1, 4, 1] and cdf = cumsum / 8.
+CDF_DATA = _frame([3.0, 1.0, 2.0, 2.0], [1.0, 2.0, 1.0, 4.0], by=["a", "b", "a", "b"])
+
+
+def test_quantile_returns_the_cdf_it_estimated_from():
+    frame, cdfs = ps.taylor_quantile(CDF_DATA, "y", "w", [0.5], return_cdf=True)
+    assert frame.equals(ps.taylor_quantile(CDF_DATA, "y", "w", [0.5]))
+    [(label, (values, cdf))] = cdfs
+    assert label is None
+    assert values.tolist() == [1.0, 2.0, 2.0, 3.0]
+    assert cdf.tolist() == [2 / 8, 3 / 8, 7 / 8, 1.0]
+
+
+def test_grouped_median_returns_one_cdf_per_group_in_row_order():
+    frame, cdfs = ps.taylor_median(CDF_DATA, "y", "w", by_col="g", return_cdf=True)
+    assert [label for label, _ in cdfs] == frame["g"].to_list() == ["a", "b"]
+    (_, (a_values, a_cdf)), (_, (b_values, b_cdf)) = cdfs
+    assert (a_values.tolist(), a_cdf.tolist()) == ([2.0, 3.0], [1 / 2, 1.0])
+    assert (b_values.tolist(), b_cdf.tolist()) == ([1.0, 2.0], [2 / 6, 1.0])
+
+
+def test_group_without_weight_has_no_cdf():
+    data = _frame([1.0, 2.0, 3.0], [1.0, 0.0, 0.0], by=["a", "b", "b"])
+    _, cdfs = ps.taylor_quantile(data, "y", "w", [0.5], by_col="g", return_cdf=True)
+    assert cdfs[0][0] == "a" and cdfs[0][1] is not None
+    assert cdfs[1] == ("b", None)
+
+
+def test_median_multi_returns_one_cdf_per_variable():
+    data = CDF_DATA.with_columns(z=pl.Series([4.0, 4.0, 1.0, 9.0]))
+    frame, cdfs = ps.taylor_median_multi(data, ["y", "z"], "w", return_cdf=True)
+    assert frame["y"].to_list() == ["y", "z"]
+    assert [label for label, _ in cdfs] == [None, None]
+    assert cdfs[0][1][0].tolist() == [1.0, 2.0, 2.0, 3.0]
+    # z sorted with its weights: 1 (w 1), 4 (w 1), 4 (w 2), 9 (w 4); total 8.
+    assert cdfs[1][1][0].tolist() == [1.0, 4.0, 4.0, 9.0]
+    assert cdfs[1][1][1].tolist() == [1 / 8, 2 / 8, 4 / 8, 1.0]
+
+
 # =============================================================================
 # WEIGHTING
 # =============================================================================

@@ -408,7 +408,7 @@ def taylor_median(
     center_arg, findings = est._singleton_variance(prep)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
 
-    result_df = rs.taylor_median(
+    result_df, cdf_list = rs.taylor_median(
         df,
         value_col=y,
         weight_col=prep.weight_col,
@@ -422,11 +422,12 @@ def taylor_median(
         domain_rows_col=prep.domain_col,
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
+        return_cdf=True,
     )
     result_df, _ = est._apply_scale_adjustment(result_df, prep=prep)
 
     est_list = est._median_result_to_param_est(
-        result_df, y, alpha, prep.by_col, df, prep.weight_col, q_method
+        result_df, y, alpha, prep.by_col, dict(cdf_list), q_method
     )
     est_cov = np.diag(result_df["var"].to_numpy())
     return est._build_estimate_result_light(
@@ -590,7 +591,7 @@ def taylor_median_multi(
     center_arg, findings = est._singleton_variance(prep)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
 
-    result_df = rs.taylor_median_multi(
+    result_df, cdf_list = rs.taylor_median_multi(
         df,
         value_cols=ys,
         weight_col=prep.weight_col,
@@ -603,6 +604,7 @@ def taylor_median_multi(
         domain_rows_col=prep.domain_col,
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
+        return_cdf=True,
     )
     result_df, _ = est._apply_scale_adjustment(result_df, prep=prep)
 
@@ -610,7 +612,7 @@ def taylor_median_multi(
     for i, y in enumerate(ys):
         sub = result_df.slice(i, 1)
         est_list = est._median_result_to_param_est(
-            sub, y, alpha, None, df, prep.weight_col, q_method
+            sub, y, alpha, None, {None: cdf_list[i][1]}, q_method
         )
         est_cov = np.diag(sub["var"].to_numpy())
         results.append(
@@ -656,7 +658,7 @@ def taylor_quantile(
     center_arg, findings = est._singleton_variance(prep)
     q_method_str = q_method.value if hasattr(q_method, "value") else str(q_method).lower()
 
-    result_df = rs.taylor_quantile(
+    result_df, cdf_list = rs.taylor_quantile(
         df,
         value_col=y,
         weight_col=prep.weight_col,
@@ -671,15 +673,15 @@ def taylor_quantile(
         domain_rows_col=prep.domain_col,
         quantile_method=q_method_str,
         **calib_kwargs(est._sample, df),
+        return_cdf=True,
     )
     result_df, _ = est._apply_scale_adjustment(result_df, prep=prep)
+    cdfs = dict(cdf_list)
 
     results: list[Estimate] = []
     for p in probs:
         sub = result_df.filter(pl.col("prob") == p)
-        est_list = est._quantile_result_to_param_est(
-            sub, y, alpha, prep.by_col, df, prep.weight_col, q_method
-        )
+        est_list = est._quantile_result_to_param_est(sub, y, alpha, prep.by_col, cdfs, q_method)
         results.append(
             est._build_estimate_result_light(
                 est_list,

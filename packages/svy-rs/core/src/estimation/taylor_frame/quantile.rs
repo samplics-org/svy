@@ -6,6 +6,9 @@ pub fn without_prob(mut df: DataFrame) -> EResult<DataFrame> {
     Ok(df)
 }
 
+/// Each by-group's label and the CDF its quantiles came from.
+pub type GroupCdfs = Vec<(String, Option<WeightedCdf>)>;
+
 /// The design columns every quantile path needs, resolved once.
 struct QuantileCols<'a> {
     weights: &'a Float64Chunked,
@@ -67,7 +70,7 @@ pub fn compute_quantile_ungrouped(
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> EResult<DataFrame> {
+) -> EResult<(DataFrame, Option<WeightedCdf>)> {
     let y = df.column(value_col)?.f64()?;
     let cols = resolve_quantile_cols(
         df,
@@ -82,7 +85,7 @@ pub fn compute_quantile_ungrouped(
         calib,
     )?;
 
-    let rows = quantiles_woodruff(
+    let (rows, cdf) = quantiles_woodruff(
         y,
         cols.weights,
         None,
@@ -96,13 +99,13 @@ pub fn compute_quantile_ungrouped(
     let k = rows.len();
 
     let (estimates, ses, variances) = unzip_woodruff(rows);
-    Ok(
-        df!["y" => vec![value_col; k], "prob" => probs.to_vec(), "est" => estimates,
-        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![n; k]]?,
-    )
+    let out = df!["y" => vec![value_col; k], "prob" => probs.to_vec(), "est" => estimates,
+        "se" => ses, "var" => variances, "df" => vec![df_val; k], "n" => vec![n; k]]?;
+    Ok((out, cdf))
 }
 
 /// Batched ungrouped quantiles: sort-bound, so the win is parallel variables, not design reuse.
+/// The CDFs come back one per variable, in `value_cols` order.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_quantile_multi(
     df: &DataFrame,
@@ -118,7 +121,7 @@ pub fn compute_quantile_multi(
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> EResult<DataFrame> {
+) -> EResult<(DataFrame, Vec<Option<WeightedCdf>>)> {
     let cols = resolve_quantile_cols(
         df,
         weight_col,
@@ -160,10 +163,12 @@ pub fn compute_quantile_multi(
     let mut ys: Vec<String> = Vec::with_capacity(n_rows);
     let mut ns: Vec<u32> = Vec::with_capacity(n_rows);
     let mut flat: Vec<(f64, f64, f64)> = Vec::with_capacity(n_rows);
-    for (i, rows) in per_var.into_iter().enumerate() {
+    let mut cdfs: Vec<Option<WeightedCdf>> = Vec::with_capacity(value_cols.len());
+    for (i, (rows, cdf)) in per_var.into_iter().enumerate() {
         ys.extend(std::iter::repeat_n(value_cols[i].clone(), k));
         ns.extend(std::iter::repeat_n(active_count(cols.weights, None), k));
         flat.extend(rows);
+        cdfs.push(cdf);
     }
 
     let (estimates, ses, variances) = unzip_woodruff(flat);
@@ -171,10 +176,9 @@ pub fn compute_quantile_multi(
         .flatten()
         .copied()
         .collect();
-    Ok(
-        df!["y" => ys, "prob" => probs_rep, "est" => estimates, "se" => ses,
-        "var" => variances, "df" => vec![df_val; n_rows], "n" => ns]?,
-    )
+    let out = df!["y" => ys, "prob" => probs_rep, "est" => estimates, "se" => ses,
+        "var" => variances, "df" => vec![df_val; n_rows], "n" => ns]?;
+    Ok((out, cdfs))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -193,7 +197,7 @@ pub fn compute_quantile_grouped(
     calib: Option<CalibSweep>,
     probs: &[f64],
     q_method: SvyQuantileMethod,
-) -> EResult<DataFrame> {
+) -> EResult<(DataFrame, GroupCdfs)> {
     let y = df.column(value_col)?.f64()?;
     let cols = resolve_quantile_cols(
         df,
@@ -215,11 +219,12 @@ pub fn compute_quantile_grouped(
     let mut dfs: Vec<u32> = Vec::new();
     let mut ns: Vec<u32> = Vec::new();
     let mut flat: Vec<(f64, f64, f64)> = Vec::new();
+    let mut cdfs: GroupCdfs = Vec::new();
 
     for group in unique_groups.iter().flatten() {
         let domain_mask = by_str.equal(group);
         let n_domain = active_count(cols.weights, Some(&domain_mask));
-        let rows = quantiles_woodruff(
+        let (rows, cdf) = quantiles_woodruff(
             y,
             cols.weights,
             Some(&domain_mask),
@@ -235,6 +240,7 @@ pub fn compute_quantile_grouped(
         dfs.extend(std::iter::repeat_n(df_val, k));
         ns.extend(std::iter::repeat_n(n_domain, k));
         flat.extend(rows);
+        cdfs.push((group.to_string(), cdf));
     }
 
     let n_rows = by_vals.len();
@@ -243,10 +249,9 @@ pub fn compute_quantile_grouped(
         .copied()
         .collect();
     let (estimates, ses, variances) = unzip_woodruff(flat);
-    Ok(
-        df![by_col => by_vals, "y" => vec![value_col; n_rows], "prob" => probs_rep,
-        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?,
-    )
+    let out = df![by_col => by_vals, "y" => vec![value_col; n_rows], "prob" => probs_rep,
+        "est" => estimates, "se" => ses, "var" => variances, "df" => dfs, "n" => ns]?;
+    Ok((out, cdfs))
 }
 
 fn unzip_woodruff(rows: Vec<(f64, f64, f64)>) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
