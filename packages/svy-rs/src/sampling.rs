@@ -6,8 +6,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::errors::to_py_err;
-use crate::sampling::pps::{PpsDraw, PpsMethod, PpsN, select_pps};
-use crate::sampling::srs::{SamplingError, SrsDraw, SrsN, select_srs};
+use svy_core::sampling::pps::{PpsDraw, PpsMethod, PpsN, select_pps};
+use svy_core::sampling::srs::{SamplingError, SrsDraw, SrsN, select_srs};
 
 /// A 1-D input: a numpy array of exactly `T`, or any sequence (older callers pass lists).
 #[derive(FromPyObject)]
@@ -98,8 +98,7 @@ pub(crate) fn select_pps_rs(
     certainty_threshold: f64,
     seed: Option<u64>,
 ) -> PyResult<PpsDraw> {
-    let pps_method = PpsMethod::from_str(method)
-        .ok_or_else(|| to_py_err(&SamplingError::UnknownMethod(method.to_string())))?;
+    let pps_method: PpsMethod = method.parse().map_err(|e| to_py_err(&e))?;
 
     let n = parse_n(n_scalar, n_map, PpsN::Scalar, PpsN::PerStratum)?;
 
@@ -168,8 +167,7 @@ pub(crate) fn select_pps_batch_rs(
     certainty_threshold: f64,
 ) -> PyResult<Vec<PpsDraw>> {
     use rayon::prelude::*;
-    let pps_method = PpsMethod::from_str(method)
-        .ok_or_else(|| to_py_err(&SamplingError::UnknownMethod(method.to_string())))?;
+    let pps_method: PpsMethod = method.parse().map_err(|e| to_py_err(&e))?;
     let n = parse_n(n_scalar, n_map, PpsN::Scalar, PpsN::PerStratum)?;
     let frame = frame.values();
     let mos = mos.values();

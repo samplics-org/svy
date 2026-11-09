@@ -3687,6 +3687,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "svy-core"
+version = "0.20.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "svy_rs"
 version = "0.20.0"
 dependencies = [
@@ -3700,6 +3708,7 @@ dependencies = [
  "pyo3-polars",
  "rayon",
  "rustc-hash",
+ "svy-core",
  "thiserror 2.0.21",
 ]
 

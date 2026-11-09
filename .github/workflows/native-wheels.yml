@@ -18,7 +18,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: wheels/svy-rs
-          key: svy-rs-wheel-v1-${{ runner.os }}-${{ hashFiles('packages/svy-rs/src/**', 'packages/svy-rs/svy_rs/**', 'packages/svy-rs/Cargo.toml', 'packages/svy-rs/Cargo.lock', 'packages/svy-rs/pyproject.toml') }}
+          key: svy-rs-wheel-v1-${{ runner.os }}-${{ hashFiles('packages/svy-rs/src/**', 'packages/svy-rs/core/**','packages/svy-rs/svy_rs/**', 'packages/svy-rs/Cargo.toml', 'packages/svy-rs/Cargo.lock', 'packages/svy-rs/pyproject.toml') }}
       - id: svy-io
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

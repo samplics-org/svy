@@ -2,10 +2,10 @@
 
 use super::hadamard_tables::get_hardcoded_hadamard;
 use crate::errors::Coded;
-use crate::rng::Rng;
 use ndarray::{Array1, Array2, ArrayView1, ShapeBuilder};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use svy_core::rng::Rng;
 use thiserror::Error;
 
 /// Each stratum's index and PSUs, and each (stratum, PSU)'s position within its stratum.

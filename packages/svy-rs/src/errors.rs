@@ -1,6 +1,7 @@
 //! Kernel errors Python can tell apart: a `ValueError` or `RuntimeError` carrying a `code`.
 
 use pyo3::prelude::*;
+pub(crate) use svy_core::errors::{Coded, KERNEL_INTERNAL};
 
 pyo3::create_exception!(_internal, KernelValueError, pyo3::exceptions::PyValueError);
 pyo3::create_exception!(
@@ -8,13 +9,6 @@ pyo3::create_exception!(
     KernelRuntimeError,
     pyo3::exceptions::PyRuntimeError
 );
-
-/// Error raised with a `code` (a `svy.errors.Code` name where one fits) for Python to branch on.
-pub(crate) trait Coded: std::fmt::Display {
-    fn code(&self) -> &'static str;
-    /// Input the caller should not have sent (`ValueError`), not a numerical failure.
-    fn invalid_input(&self) -> bool;
-}
 
 pub(crate) fn to_py_err(e: &impl Coded) -> PyErr {
     let err = if e.invalid_input() {
@@ -28,6 +22,3 @@ pub(crate) fn to_py_err(e: &impl Coded) -> PyErr {
     });
     err
 }
-
-/// A polars failure inside a kernel: not the caller's input, and no finer code.
-pub(crate) const KERNEL_INTERNAL: &str = "KERNEL_INTERNAL";
