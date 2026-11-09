@@ -17,6 +17,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 - Taylor quantiles and medians collect their (value, weight) pairs from plain slices and sort them in parallel with a stable sort, so tied values keep row order (a NaN value keeps the sequential sort): quantiles about 30% and medians about 40% faster, identical results.
 - `tabulate_rs` builds the Taylor design once per table instead of once per cell, again for the totals and again for the covariance, and reads each row's cell once: about twice as fast, identical results.
 - `taylor_prop`, `taylor_factor_total` and `taylor_prop_multi` read each row's level once and build every level's indicator from those codes, instead of hashing the strings for the levels and comparing every string again per level: about 40% faster, identical results.
+- The replicate kernels index domains and levels with `FxHashMap` instead of std's SipHash, which hashed every row's string: replicate `mean(by=)` about 33% and `prop` about 15% faster, identical results (codes follow first appearance, so the hash plays no part in them).
 - Grouped Taylor means and proportions expand each domain's mask once for the estimate, scores and SRS variance instead of once in each, and keep the scores as the variance's array instead of copying them out of a `Float64Chunked`: 6–14% faster in the kernel, identical results.
 - Release builds use thin LTO. Without it the GLM fit ran 23% slower once its kernels sat in another crate; fat LTO with one codegen unit fixed that but cost tabulation 15%.
 
