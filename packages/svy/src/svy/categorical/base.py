@@ -411,6 +411,12 @@ class Categorical:
         _rec_cols += [c for c in _var_cols if c not in cols]
         if rep_kw is not None:
             _rec_cols += [c for c in rep_kw["rep_weight_cols"] if c not in cols + _rec_cols]
+        # The design keys Sample keeps: dropping them here made every call rebuild them.
+        _rec_cols += [
+            k
+            for k in self._sample._internal_design.values()
+            if k and k in local_data.columns and k not in cols + _rec_cols
+        ]
 
         # Domain mask: materialized as a column so it filters along with any
         # row drop below (design nulls), then handed to the kernel.

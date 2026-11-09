@@ -681,12 +681,13 @@ def prepare_data(
     # When Phase C codes are active, skip the stratum/psu/ssu string concats
     # (the kernel uses the integer codes instead) and build only the ``by``
     # concat. This removes the per-call concat_str work from the hot path.
+    # String, not Categorical: the kernel reads strings, so a Categorical key was cast back below.
     _cc, _ = sample._create_concatenated_cols_from_lists(
         data=local_data,
         design=design,
         by=by,
         null_token=NULL_LEVEL,
-        categorical=True,
+        categorical=False,
         drop_original=False,
         include_design=_design_codes is None,
     )
