@@ -19,6 +19,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 - `taylor_prop`, `taylor_factor_total` and `taylor_prop_multi` read each row's level once and build every level's indicator from those codes, instead of hashing the strings for the levels and comparing every string again per level: about 40% faster, identical results.
 - Grouped Taylor means and proportions expand each domain's mask once for the estimate, scores and SRS variance instead of once in each, and keep the scores as the variance's array instead of copying them out of a `Float64Chunked`: 6–14% faster in the kernel, identical results.
 - Release builds use thin LTO. Without it the GLM fit ran 23% slower once its kernels sat in another crate; fat LTO with one codegen unit fixed that but cost tabulation 15%.
+- The GLM fit sums its cross-products over eight lanes, and runs its per-row passes (η, μ and the deviance terms, the IRLS weights and working response, separation, the null deviance), the `X'Wz` columns and the sandwich's per-stratum and per-column sums in parallel, still adding the deviances and the meat's terms in row and stratum order: Taylor fits about 3.2× and replicate fits about 12% faster. The lanes change the summation order, so estimates and SEs move in the last digits (at most 5e-14 in the cases compared).
 
 ## [0.20.0] — 2026-10-28
 

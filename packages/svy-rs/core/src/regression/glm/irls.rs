@@ -1,5 +1,7 @@
 use super::*;
 
+const ROW_BLOCK: usize = 8192;
+
 /// Null deviance under an offset: as R's glm(), refit `y ~ 1` with the offset rather than use the weighted mean.
 #[allow(clippy::too_many_arguments)]
 fn null_deviance_with_offset(
@@ -507,6 +509,7 @@ pub(crate) fn fit_glm_domain(
 
     let mut z_work = vec![0.0f64; n];
     let mut w_irls = vec![0.0; n];
+    let mut dev_terms = vec![0.0f64; n];
     let mut XtWX = Mat::<f64>::zeros(k, k);
     let mut XtWz = Mat::<f64>::zeros(k, 1);
 
@@ -543,25 +546,41 @@ pub(crate) fn fit_glm_domain(
 
         let beta_new = solve_linear_system(XtWX.as_ref(), XtWz.as_ref());
 
-        // Column-outer: one contiguous pass over x per term.
-        eta[..n].copy_from_slice(&offset_vals[..n]);
-        for j in 0..k {
-            let bj = beta_new[(j, 0)];
-            if bj == 0.0 {
-                continue;
-            }
-            let xj = &x[j * n..(j + 1) * n];
-            for i in 0..n {
-                eta[i] += xj[i] * bj;
-            }
-        }
+        // Blocks of rows in parallel; each row still adds its terms in coefficient order.
+        let b_new: Vec<f64> = (0..k).map(|j| beta_new[(j, 0)]).collect();
+        eta.par_chunks_mut(ROW_BLOCK)
+            .enumerate()
+            .for_each(|(blk, e)| {
+                let lo = blk * ROW_BLOCK;
+                e.copy_from_slice(&offset_vals[lo..lo + e.len()]);
+                for (j, &bj) in b_new.iter().enumerate() {
+                    if bj == 0.0 {
+                        continue;
+                    }
+                    let xj = &x[j * n + lo..j * n + lo + e.len()];
+                    for (ei, &xi) in e.iter_mut().zip(xj) {
+                        *ei += xi * bj;
+                    }
+                }
+            });
 
+        // mu and each row's deviance term in parallel; the deviance still sums in row order.
+        mu.par_chunks_mut(ROW_BLOCK)
+            .zip(dev_terms.par_chunks_mut(ROW_BLOCK))
+            .enumerate()
+            .for_each(|(blk, (m, d))| {
+                let lo = blk * ROW_BLOCK;
+                for t in 0..m.len() {
+                    let i = lo + t;
+                    let mu_i = link.inverse(eta[i]);
+                    m[t] = mu_i;
+                    d[t] = w_samp[i] * family.unit_deviance(y_vals[i], mu_i);
+                }
+            });
         let mut dev_new = 0.0;
         for i in 0..n {
-            let mu_i = link.inverse(eta[i]);
-            mu[i] = mu_i;
             if domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0 {
-                dev_new += w_samp[i] * family.unit_deviance(y_vals[i], mu_i);
+                dev_new += dev_terms[i];
             }
         }
 
@@ -743,11 +762,22 @@ pub(crate) fn fit_glm_domain(
                 for i in 0..n {
                     row_w[i] = scale_h[strata_idx[i]] * scores[i] * scores[i];
                 }
+                // Columns in parallel; each still sums its rows in row order.
+                let col_sums: Vec<Vec<f64>> = (0..k)
+                    .into_par_iter()
+                    .map(|j| {
+                        let col = &x[j * n..(j + 1) * n];
+                        let mut s = vec![0.0f64; n_strata];
+                        for i in 0..n {
+                            s[strata_idx[i]] += scores[i] * col[i];
+                        }
+                        s
+                    })
+                    .collect();
                 let mut sums = vec![0.0f64; n_strata * k];
-                for j in 0..k {
-                    let col = &x[j * n..(j + 1) * n];
-                    for i in 0..n {
-                        sums[strata_idx[i] * k + j] += scores[i] * col[i];
+                for (j, s) in col_sums.iter().enumerate() {
+                    for h in 0..n_strata {
+                        sums[h * k + j] = s[h];
                     }
                 }
                 accumulate_weighted_crossprod(&x, &row_w, n, k, &mut upper);
@@ -766,64 +796,68 @@ pub(crate) fn fit_glm_domain(
                     }
                 }
             } else {
-                let mut slot = vec![usize::MAX; n_psu_levels];
-                let mut totals: Vec<f64> = Vec::new();
-                let mut used: Vec<usize> = Vec::new();
-                let mut mean = vec![0.0f64; k];
-                let mut local = vec![0.0f64; k * k];
-
-                for h in 0..n_strata {
-                    totals.clear();
-                    used.clear();
-
-                    for &i in &strata_obs[h] {
-                        let pid = psu_idx[i];
-                        let li = if slot[pid] == usize::MAX {
-                            let t = used.len();
-                            slot[pid] = t;
-                            used.push(pid);
-                            totals.resize(totals.len() + k, 0.0);
-                            t
-                        } else {
-                            slot[pid]
-                        };
-                        let s_i = scores[i];
-                        if s_i != 0.0 {
-                            let base = li * k;
-                            for j in 0..k {
-                                totals[base + j] += s_i * x[j * n + i];
+                // Strata in parallel; their terms still enter the meat in stratum order.
+                let locals: Vec<Option<Vec<f64>>> = (0..n_strata)
+                    .into_par_iter()
+                    .map_init(
+                        || vec![usize::MAX; n_psu_levels],
+                        |slot, h| {
+                            let mut totals: Vec<f64> = Vec::new();
+                            let mut used: Vec<usize> = Vec::new();
+                            for &i in &strata_obs[h] {
+                                let pid = psu_idx[i];
+                                let li = if slot[pid] == usize::MAX {
+                                    let t = used.len();
+                                    slot[pid] = t;
+                                    used.push(pid);
+                                    totals.resize(totals.len() + k, 0.0);
+                                    t
+                                } else {
+                                    slot[pid]
+                                };
+                                let s_i = scores[i];
+                                if s_i != 0.0 {
+                                    let base = li * k;
+                                    for j in 0..k {
+                                        totals[base + j] += s_i * x[j * n + i];
+                                    }
+                                }
                             }
-                        }
-                    }
 
-                    let m = used.len();
-                    for &pid in &used {
-                        slot[pid] = usize::MAX;
-                    }
-                    if m <= 1 {
-                        continue;
-                    }
-
-                    mean.iter_mut().for_each(|v| *v = 0.0);
-                    for li in 0..m {
-                        for j in 0..k {
-                            mean[j] += totals[li * k + j];
-                        }
-                    }
-                    for v in mean.iter_mut().take(k) {
-                        *v /= m as f64;
-                    }
-
-                    local.iter_mut().for_each(|v| *v = 0.0);
-                    for li in 0..m {
-                        let base = li * k;
-                        for a in 0..k {
-                            let da = totals[base + a] - mean[a];
-                            for b in a..k {
-                                local[a * k + b] += da * (totals[base + b] - mean[b]);
+                            let m = used.len();
+                            for &pid in &used {
+                                slot[pid] = usize::MAX;
                             }
-                        }
-                    }
+                            if m <= 1 {
+                                return None;
+                            }
+
+                            let mut mean = vec![0.0f64; k];
+                            for li in 0..m {
+                                for j in 0..k {
+                                    mean[j] += totals[li * k + j];
+                                }
+                            }
+                            for v in mean.iter_mut().take(k) {
+                                *v /= m as f64;
+                            }
+
+                            let mut local = vec![0.0f64; k * k];
+                            for li in 0..m {
+                                let base = li * k;
+                                for a in 0..k {
+                                    let da = totals[base + a] - mean[a];
+                                    for b in a..k {
+                                        local[a * k + b] += da * (totals[base + b] - mean[b]);
+                                    }
+                                }
+                            }
+                            Some(local)
+                        },
+                    )
+                    .collect();
+                for (h, local) in locals.iter().enumerate() {
+                    let Some(local) = local else { continue };
                     for a in 0..k {
                         for b in a..k {
                             upper[a * k + b] += scale_h[h] * local[a * k + b];
@@ -875,7 +909,7 @@ pub(crate) fn fit_glm_domain(
     let cov = &tmp * &bread;
 
     // As R, df counts only PSUs and strata with a positive-weight domain row; NaN when none is left.
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet as HashSet;
     let df_resid = if psu.is_some() && strata.is_some() {
         let mut total_psus: usize = 0;
         let mut nonempty_strata: usize = 0;
@@ -901,7 +935,7 @@ pub(crate) fn fit_glm_domain(
         if m <= 1 { f64::NAN } else { (m - 1) as f64 }
     } else if strata.is_some() {
         let mut n_dom: isize = 0;
-        let mut strata_in_dom: HashSet<usize> = HashSet::new();
+        let mut strata_in_dom: HashSet<usize> = HashSet::default();
         for i in 0..n {
             let in_domain = domain_mask.is_none_or(|m| m[i]);
             if in_domain && w_samp[i] > 0.0 {
@@ -963,18 +997,21 @@ pub(crate) fn fit_glm_domain(
         }
         let y_mean = if sum_w > 0.0 { sum_wy / sum_w } else { 0.0 };
 
+        dev_terms
+            .par_chunks_mut(ROW_BLOCK)
+            .enumerate()
+            .for_each(|(blk, d)| {
+                let lo = blk * ROW_BLOCK;
+                for (t, dt) in d.iter_mut().enumerate() {
+                    let i = lo + t;
+                    *dt = w_samp[i] * family.unit_deviance(y_vals[i], y_mean);
+                }
+            });
         let mut dev0 = 0.0;
         for i in 0..n {
-            let in_domain = domain_mask.is_none_or(|m| m[i]);
-            if !in_domain {
-                continue;
+            if domain_mask.is_none_or(|m| m[i]) && w_samp[i] > 0.0 {
+                dev0 += dev_terms[i];
             }
-            let w_i = w_samp[i];
-            if w_i <= 0.0 {
-                continue;
-            }
-            let y_i = y_vals[i];
-            dev0 += w_i * family.unit_deviance(y_i, y_mean);
         }
         dev0
     };
@@ -1047,30 +1084,41 @@ fn separation_check(
     let resolution = SEPARATION_RESOLUTION * tol * (deviance + 0.1);
 
     let mut retained = vec![0.0f64; n];
-    let mut boundary_rows = 0usize;
-    for i in 0..n {
-        let w_i = w_samp[i];
-        if !(domain_mask.is_none_or(|m| m[i]) && w_i > 0.0) {
-            continue;
-        }
-        let (y_i, mu_i) = (y_vals[i], mu[i]);
-        let at_floor = if binomial {
-            (y_i == 0.0 && mu_i <= MU_FLOOR) || (y_i == 1.0 && mu_i >= 1.0 - MU_FLOOR)
-        } else {
-            y_i == 0.0 && mu_i <= MU_FLOOR
-        };
-        let at_edge = y_i == 0.0 || (binomial && y_i == 1.0);
-        // Binomial deviance is -2 ln(u) >= 2 (1 - u): a row this far out skips the log.
-        let far = binomial && {
-            let mu_c = mu_i.clamp(MU_FLOOR, 1.0 - MU_FLOOR);
-            w_i * if y_i == 1.0 { 1.0 - mu_c } else { mu_c } >= resolution
-        };
-        if at_edge && (at_floor || (!far && w_i * family.unit_deviance(y_i, mu_i) < resolution)) {
-            boundary_rows += 1;
-        } else {
-            retained[i] = w_i;
-        }
-    }
+    let boundary_rows: usize = retained
+        .par_chunks_mut(ROW_BLOCK)
+        .enumerate()
+        .map(|(blk, r)| {
+            let lo = blk * ROW_BLOCK;
+            let mut count = 0usize;
+            for (t, ri) in r.iter_mut().enumerate() {
+                let i = lo + t;
+                let w_i = w_samp[i];
+                if !(domain_mask.is_none_or(|m| m[i]) && w_i > 0.0) {
+                    continue;
+                }
+                let (y_i, mu_i) = (y_vals[i], mu[i]);
+                let at_floor = if binomial {
+                    (y_i == 0.0 && mu_i <= MU_FLOOR) || (y_i == 1.0 && mu_i >= 1.0 - MU_FLOOR)
+                } else {
+                    y_i == 0.0 && mu_i <= MU_FLOOR
+                };
+                let at_edge = y_i == 0.0 || (binomial && y_i == 1.0);
+                // Binomial deviance is -2 ln(u) >= 2 (1 - u): a row this far out skips the log.
+                let far = binomial && {
+                    let mu_c = mu_i.clamp(MU_FLOOR, 1.0 - MU_FLOOR);
+                    w_i * if y_i == 1.0 { 1.0 - mu_c } else { mu_c } >= resolution
+                };
+                if at_edge
+                    && (at_floor || (!far && w_i * family.unit_deviance(y_i, mu_i) < resolution))
+                {
+                    count += 1;
+                } else {
+                    *ri = w_i;
+                }
+            }
+            count
+        })
+        .sum();
     if boundary_rows == 0 {
         return None;
     }
