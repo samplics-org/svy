@@ -31,7 +31,7 @@ def _cntlin_rows(path):
 
 
 def _v5_formats(path):
-    with pd.read_sas(path, format="xport", iterator=True) as reader:
+    with pd.read_sas(path, format="xport", iterator=True, encoding="utf-8") as reader:
         return {f["name"].decode().strip(): f["nform"].decode().strip() for f in reader.fields}
 
 
@@ -78,7 +78,7 @@ def test_formats_file_is_a_v5_member_named_formats(tmp_path, survey):
     fmts = tmp_path / "fmts.xpt"
     write_xpt(survey, tmp_path / "d.xpt", value_labels=SURVEY_LABELS, formats_path=fmts)
     assert fmts.read_bytes()[:80].startswith(b"HEADER RECORD*******LIBRARY HEADER RECORD!!!!!!!")
-    with pd.read_sas(fmts, format="xport", iterator=True) as reader:
+    with pd.read_sas(fmts, format="xport", iterator=True, encoding="utf-8") as reader:
         assert reader.member_info["set_name"] == "FORMATS"
 
 
