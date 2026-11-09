@@ -21,6 +21,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 - The replicate kernels index domains and levels with `FxHashMap` instead of std's SipHash, which hashed every row's string: replicate `mean(by=)` about 33% and `prop` about 15% faster, identical results (codes follow first appearance, so the hash plays no part in them).
 - Grouped Taylor means and proportions expand each domain's mask once for the estimate, scores and SRS variance instead of once in each, and keep the scores as the variance's array instead of copying them out of a `Float64Chunked`: 6–14% faster in the kernel, identical results.
 - Release builds use thin LTO. Without it the GLM fit ran 23% slower once its kernels sat in another crate; fat LTO with one codegen unit fixed that but cost tabulation 15%.
+- The GLM fit sums its cross-products over eight lanes, and runs its per-row passes (η, μ and the deviance terms, the IRLS weights and working response, separation, the null deviance), the `X'Wz` columns and the sandwich's per-stratum and per-column sums in parallel, still adding the deviances and the meat's terms in row and stratum order: Taylor fits about 3.2× and replicate fits about 12% faster. The lanes change the summation order, so estimates and SEs move in the last digits (at most 5e-14 in the cases compared).
 
 ## [0.20.0] — 2026-10-28
 

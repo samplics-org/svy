@@ -94,6 +94,45 @@ const XP_BLOCK: usize = 256;
 /// Rows per parallel chunk, fixed so the summation order, hence the result, is the same at any core count.
 const XP_CHUNK: usize = 8192;
 
+const LANES: usize = 8;
+
+/// Eight lane sums combined in a fixed order, then the tail.
+#[inline(always)]
+fn combine(acc: [f64; LANES], tail: f64) -> f64 {
+    ((acc[0] + acc[4]) + (acc[1] + acc[5])) + ((acc[2] + acc[6]) + (acc[3] + acc[7])) + tail
+}
+
+/// `sum a[t] * b[t]` over eight lanes combined in a fixed order: the compiler vectorizes it,
+/// where one running sum is a chain of dependent additions.
+#[inline(always)]
+fn dot2(a: &[f64], b: &[f64]) -> f64 {
+    let mut acc = [0.0f64; LANES];
+    let ((ca, ra), (cb, rb)) = (a.as_chunks::<LANES>(), b.as_chunks::<LANES>());
+    let tail: f64 = ra.iter().zip(rb).map(|(p, q)| p * q).sum();
+    for (pa, pb) in ca.iter().zip(cb) {
+        for l in 0..LANES {
+            acc[l] += pa[l] * pb[l];
+        }
+    }
+    combine(acc, tail)
+}
+
+/// `sum a[t] * b[t] * c[t]`, laned as [`dot2`].
+#[inline(always)]
+fn dot3(a: &[f64], b: &[f64], c: &[f64]) -> f64 {
+    let mut acc = [0.0f64; LANES];
+    let (ca, ra) = a.as_chunks::<LANES>();
+    let (cb, rb) = b.as_chunks::<LANES>();
+    let (cc, rc) = c.as_chunks::<LANES>();
+    let tail: f64 = ra.iter().zip(rb).zip(rc).map(|((p, q), r)| p * q * r).sum();
+    for ((pa, pb), pc) in ca.iter().zip(cb).zip(cc) {
+        for l in 0..LANES {
+            acc[l] += pa[l] * pb[l] * pc[l];
+        }
+    }
+    combine(acc, tail)
+}
+
 /// Upper triangle of `out[a*k + b] += sum_i w[i] cols[a*n + i] cols[b*n + i]`, in an order rayon cannot change.
 pub(super) fn accumulate_weighted_crossprod(
     cols: &[f64],
@@ -118,11 +157,7 @@ pub(super) fn accumulate_weighted_crossprod(
                 }
                 for c in a..k {
                     let xc = &cols[c * n + b..c * n + e];
-                    let mut s = 0.0f64;
-                    for t in 0..len {
-                        s += wxa[t] * xc[t];
-                    }
-                    acc[a * k + c] += s;
+                    acc[a * k + c] += dot2(wxa, xc);
                 }
             }
             b = e;
@@ -171,42 +206,53 @@ pub(super) fn build_irls_normal_eqs(
     XtWX: &mut Mat<f64>,
     XtWz: &mut Mat<f64>,
 ) {
-    for i in 0..n {
-        let in_domain = domain_mask.is_none_or(|m| m[i]);
-        let w_i = w_samp[i];
-        if !in_domain || w_i <= 0.0 {
-            w_irls[i] = 0.0;
-            z[i] = 0.0;
-            continue;
-        }
+    z.par_chunks_mut(XP_CHUNK)
+        .zip(w_irls.par_chunks_mut(XP_CHUNK))
+        .enumerate()
+        .for_each(|(blk, (zc, wc))| {
+            let lo = blk * XP_CHUNK;
+            for t in 0..zc.len() {
+                let i = lo + t;
+                let in_domain = domain_mask.is_none_or(|m| m[i]);
+                let w_i = w_samp[i];
+                if !in_domain || w_i <= 0.0 {
+                    wc[t] = 0.0;
+                    zc[t] = 0.0;
+                    continue;
+                }
 
-        let mu_i = mu[i];
-        let v = family.variance(mu_i).max(1e-12);
-        let d = link.mu_eta(mu_i, eta[i]);
-        let wi = w_i * (d * d) / v;
+                let mu_i = mu[i];
+                let v = family.variance(mu_i).max(1e-12);
+                let d = link.mu_eta(mu_i, eta[i]);
+                let wi = w_i * (d * d) / v;
 
-        let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
-        // The offset leaves z and returns wherever eta is rebuilt: R's z <- (eta - offset) + (y - mu)/mu.eta.
-        z[i] = (eta[i] - offset[i]) + (y_vals[i] - mu_i) / safe_d;
-        w_irls[i] = if wi < 1e-18 { 0.0 } else { wi };
-    }
+                let safe_d = if d.abs() < 1e-12 { 1e-12 } else { d };
+                // The offset leaves z and returns wherever eta is rebuilt: R's z <- (eta - offset) + (y - mu)/mu.eta.
+                zc[t] = (eta[i] - offset[i]) + (y_vals[i] - mu_i) / safe_d;
+                wc[t] = if wi < 1e-18 { 0.0 } else { wi };
+            }
+        });
 
     let mut acc_wx = vec![0.0f64; k * k];
     accumulate_weighted_crossprod(x, w_irls, n, k, &mut acc_wx);
 
-    for r in 0..k {
-        let xr = &x[r * n..(r + 1) * n];
-        let mut total = 0.0f64;
-        let mut b = 0usize;
-        while b < n {
-            let e = (b + XP_BLOCK).min(n);
-            let mut s = 0.0f64;
-            for t in b..e {
-                s += w_irls[t] * xr[t] * z[t];
+    let (w_irls, z) = (&*w_irls, &*z);
+    let xtwz: Vec<f64> = (0..k)
+        .into_par_iter()
+        .map(|r| {
+            let xr = &x[r * n..(r + 1) * n];
+            let mut total = 0.0f64;
+            let mut b = 0usize;
+            while b < n {
+                let e = (b + XP_BLOCK).min(n);
+                let (w, xb, zb) = (&w_irls[b..e], &xr[b..e], &z[b..e]);
+                total += dot3(w, xb, zb);
+                b = e;
             }
-            total += s;
-            b = e;
-        }
+            total
+        })
+        .collect();
+    for (r, total) in xtwz.into_iter().enumerate() {
         XtWz[(r, 0)] = total;
     }
 
