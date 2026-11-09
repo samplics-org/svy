@@ -1,4 +1,66 @@
 use super::*;
+use rustc_hash::FxHashMap;
+
+/// A string column's sorted levels, with each row's level read once for every indicator.
+struct LevelCodes {
+    levels: Vec<String>,
+    // The row's index into `levels`; MISSING where the value is null.
+    codes: Vec<u32>,
+    has_missing: bool,
+}
+
+impl LevelCodes {
+    const MISSING: u32 = u32::MAX;
+
+    fn new(y: &StringChunked) -> Self {
+        // Codes in first-appearance order, renumbered to sorted order once the levels are known.
+        let mut seen: FxHashMap<&str, u32> = FxHashMap::default();
+        let mut has_missing = false;
+        let mut codes: Vec<u32> = y
+            .iter()
+            .map(|v| match v {
+                None => {
+                    has_missing = true;
+                    Self::MISSING
+                }
+                Some(s) => {
+                    let next = seen.len() as u32;
+                    *seen.entry(s).or_insert(next)
+                }
+            })
+            .collect();
+        let mut first_seen: Vec<(&str, u32)> = seen.into_iter().collect();
+        first_seen.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let mut rank = vec![0u32; first_seen.len()];
+        for (r, &(_, code)) in first_seen.iter().enumerate() {
+            rank[code as usize] = r as u32;
+        }
+        for c in codes.iter_mut().filter(|c| **c != Self::MISSING) {
+            *c = rank[*c as usize];
+        }
+        let levels = first_seen.into_iter().map(|(s, _)| s.to_string()).collect();
+        Self {
+            levels,
+            codes,
+            has_missing,
+        }
+    }
+
+    /// 1 at level `j`, 0 at the other levels, missing where the value is.
+    fn indicator(&self, j: usize) -> Float64Chunked {
+        let j = j as u32;
+        if self.has_missing {
+            let ind: Vec<Option<f64>> = self
+                .codes
+                .iter()
+                .map(|&c| (c != Self::MISSING).then(|| f64::from(c == j)))
+                .collect();
+            return Float64Chunked::from_slice_options("indicator".into(), &ind);
+        }
+        let ind: Vec<f64> = self.codes.iter().map(|&c| f64::from(c == j)).collect();
+        Float64Chunked::from_vec("indicator".into(), ind)
+    }
+}
 
 /// A categorical level's share of the (domain) weight, or its estimated count.
 #[derive(Clone, Copy)]
@@ -37,13 +99,8 @@ pub fn compute_levels_ungrouped(
 
     let value_series = df.column(value_col)?;
     let value_str = value_series.cast(&DataType::String)?;
-    let value_str = value_str.str()?;
-    let mut levels: Vec<String> = value_str
-        .unique()?
-        .iter()
-        .filter_map(|v| v.map(|s| s.to_string()))
-        .collect();
-    levels.sort();
+    let coded = LevelCodes::new(value_str.str()?);
+    let levels = &coded.levels;
 
     let mut level_vals: Vec<String> = Vec::new();
     let mut estimates: Vec<f64> = Vec::new();
@@ -60,36 +117,23 @@ pub fn compute_levels_ungrouped(
     let df_val = degrees_of_freedom_from_design(weights, &design, None);
     let active = design.domain_rows(weights.len(), rows.as_ref(), None);
 
-    for lvl in &levels {
-        let indicator: Vec<Option<f64>> = value_str
-            .iter()
-            .map(|v| match v {
-                Some(val) if val == lvl => Some(1.0),
-                Some(_) => Some(0.0),
-                None => None,
-            })
-            .collect();
-        let indicator_ca = Float64Chunked::from_slice_options("indicator".into(), &indicator);
-        let (estimate, scores, srs_var) = match scale {
+    for (j, lvl) in levels.iter().enumerate() {
+        let indicator_ca = coded.indicator(j);
+        let (estimate, scores_arr, srs_var) = match scale {
             LevelScale::Share => match point_estimate_mean(&indicator_ca, weights) {
                 Ok(estimate) => (
                     estimate,
-                    scores_mean(&indicator_ca, weights)?,
+                    scores_mean_arr(&indicator_ca, weights)?,
                     srs_variance_mean(&indicator_ca, weights, srs)?,
                 ),
-                Err(_) => (
-                    f64::NAN,
-                    Float64Chunked::full("scores".into(), 0.0, indicator_ca.len()),
-                    f64::NAN,
-                ),
+                Err(_) => (f64::NAN, vec![0.0; indicator_ca.len()], f64::NAN),
             },
             LevelScale::Count => (
                 point_estimate_total(&indicator_ca, weights)?,
-                scores_total(&indicator_ca, weights)?,
+                scores_total_arr(&indicator_ca, weights)?,
                 srs_variance_total(&indicator_ca, weights, srs)?,
             ),
         };
-        let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
         let (variance, se) = var_se(
             estimate,
             taylor_variance_apply_in(&scores_arr, &design, active.as_deref()),
@@ -158,44 +202,25 @@ pub fn compute_prop_multi(
         .iter()
         .map(|s| s.str())
         .collect::<PolarsResult<Vec<_>>>()?;
-    let levels_per_var: Vec<Vec<String>> = value_strs
-        .iter()
-        .map(|vs| -> EResult<Vec<String>> {
-            let mut lv: Vec<String> = vs
-                .unique()?
-                .iter()
-                .filter_map(|v| v.map(|s| s.to_string()))
-                .collect();
-            lv.sort();
-            Ok(lv)
-        })
-        .collect::<EResult<Vec<_>>>()?;
+    let coded_per_var: Vec<LevelCodes> = value_strs
+        .par_iter()
+        .map(|vs| LevelCodes::new(vs))
+        .collect();
 
     type PropRow = (String, String, f64, f64, f64, u32, f64); // y, level, est, se, var, n, deff
     let per_var = (0..value_cols.len())
         .into_par_iter()
         .map(|i| -> EResult<Vec<PropRow>> {
-            let value_str = value_strs[i];
-            let levels = &levels_per_var[i];
-            let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
-            for lvl in levels {
-                let indicator: Vec<Option<f64>> = value_str
-                    .iter()
-                    .map(|v| match v {
-                        Some(val) if val == lvl => Some(1.0),
-                        Some(_) => Some(0.0),
-                        None => None,
-                    })
-                    .collect();
-                let indicator_ca =
-                    Float64Chunked::from_slice_options("indicator".into(), &indicator);
+            let coded = &coded_per_var[i];
+            let mut out: Vec<PropRow> = Vec::with_capacity(coded.levels.len());
+            for (j, lvl) in coded.levels.iter().enumerate() {
+                let indicator_ca = coded.indicator(j);
                 let Ok(estimate) = point_estimate_mean(&indicator_ca, weights) else {
                     let nan = f64::NAN;
                     out.push((value_cols[i].clone(), lvl.clone(), nan, nan, nan, n, nan));
                     continue;
                 };
-                let scores = scores_mean(&indicator_ca, weights)?;
-                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
+                let scores_arr = scores_mean_arr(&indicator_ca, weights)?;
                 let variance = taylor_variance_apply_in(&scores_arr, &design, active.as_deref());
                 let se = variance.max(0.0).sqrt();
                 let srs_var = srs_variance_mean(&indicator_ca, weights, srs)?;
@@ -275,13 +300,8 @@ pub fn compute_levels_grouped(
 
     let value_series = df.column(value_col)?;
     let value_str = value_series.cast(&DataType::String)?;
-    let value_str = value_str.str()?;
-    let mut levels: Vec<String> = value_str
-        .unique()?
-        .iter()
-        .filter_map(|v| v.map(|s| s.to_string()))
-        .collect();
-    levels.sort();
+    let coded = LevelCodes::new(value_str.str()?);
+    let levels = &coded.levels;
 
     let by_str = df.column(by_col)?.str()?;
     // Group discovery and the design build are independent full passes.
@@ -303,19 +323,9 @@ pub fn compute_levels_grouped(
         .par_iter()
         .map(|m| degrees_of_freedom_from_design(weights, &design, Some(m)))
         .collect();
-    let indicators: Vec<Float64Chunked> = levels
-        .par_iter()
-        .map(|lvl| {
-            let indicator: Vec<Option<f64>> = value_str
-                .iter()
-                .map(|v| match v {
-                    Some(val) if val == lvl => Some(1.0),
-                    Some(_) => Some(0.0),
-                    None => None,
-                })
-                .collect();
-            Float64Chunked::from_slice_options("indicator".into(), &indicator)
-        })
+    let indicators: Vec<Float64Chunked> = (0..levels.len())
+        .into_par_iter()
+        .map(|j| coded.indicator(j))
         .collect();
     let per_group = groups
         .par_iter()
@@ -402,4 +412,32 @@ pub fn compute_levels_grouped(
     let out = df![by_col => by_vals, "y" => vec![value_col; n_rows], "level" => level_vals,
         "est" => estimates, "se" => ses, "var" => variances, "df" => dfs_vec, "n" => ns, "deff" => deffs]?;
     Ok((out, cov))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn level_codes_sort_levels_and_keep_nulls_missing() {
+        let y = StringChunked::from_iter([Some("b"), None, Some("a"), Some("b"), Some("c")]);
+        let coded = LevelCodes::new(&y);
+        assert_eq!(coded.levels, ["a", "b", "c"]);
+        let b: Vec<Option<f64>> = coded.indicator(1).iter().collect();
+        assert_eq!(b, [Some(1.0), None, Some(0.0), Some(1.0), Some(0.0)]);
+    }
+
+    #[test]
+    fn level_codes_without_nulls_give_null_free_indicators() {
+        let y = StringChunked::from_iter([Some("x"), Some("y"), Some("x")]);
+        let x = LevelCodes::new(&y).indicator(0);
+        assert_eq!(x.null_count(), 0);
+        assert_eq!(x.cont_slice().unwrap(), [1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn level_codes_of_all_nulls_have_no_levels() {
+        let y = StringChunked::from_iter([None::<&str>, None]);
+        assert!(LevelCodes::new(&y).levels.is_empty());
+    }
 }
