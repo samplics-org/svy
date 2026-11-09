@@ -1,4 +1,5 @@
 use super::*;
+use crate::estimation::taylor::WeightedCdf;
 
 /// Drop the `prob` column: the median entry points report no probability.
 pub fn without_prob(mut df: DataFrame) -> EResult<DataFrame> {
