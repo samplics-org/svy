@@ -392,7 +392,15 @@ fn sorted_weighted_cdf(mut pairs: Vec<(f64, f64)>) -> Option<(Vec<f64>, Vec<f64>
         return None;
     }
 
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let by_value =
+        |a: &(f64, f64), b: &(f64, f64)| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal);
+    // Both sorts are stable, so ties keep row order; with a NaN the comparison is not a total
+    // order and the result would depend on the algorithm, so that case keeps the sequential one.
+    if pairs.iter().any(|p| p.0.is_nan()) {
+        pairs.sort_by(by_value);
+    } else {
+        rayon::slice::ParallelSliceMut::par_sort_by(pairs.as_mut_slice(), by_value);
+    }
 
     let (y_sorted, w_sorted): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
 
@@ -417,6 +425,17 @@ fn quantile_pairs(
     weights: &Float64Chunked,
     domain_mask: Option<&BooleanChunked>,
 ) -> Vec<(f64, f64)> {
+    // Fast path: plain slices give the same pairs in the same order without Option iterators.
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        return match domain_mask {
+            None => ys.iter().copied().zip(ws.iter().copied()).collect(),
+            Some(mask) => mask_flags(mask)
+                .into_iter()
+                .zip(ys.iter().zip(ws))
+                .filter_map(|(m, (&yi, &wi))| m.then_some((yi, wi)))
+                .collect(),
+        };
+    }
     match domain_mask {
         None => y
             .iter()
@@ -3240,6 +3259,47 @@ mod tests {
             err.to_string(),
             "unknown quantile method 'unknown'; expected 'lower', 'higher', 'middle', 'nearest' or 'linear'"
         );
+    }
+
+    // Large enough for rayon to split the sort; three values, so nearly every row is a tie.
+    #[test]
+    fn weighted_cdf_keeps_tied_rows_in_row_order_as_a_sequential_stable_sort() {
+        let n = 200_000;
+        let pairs: Vec<(f64, f64)> = (0..n)
+            .map(|i| {
+                (
+                    f64::from((i * 7 % 3) as u32),
+                    0.5 + f64::from((i % 101) as u32),
+                )
+            })
+            .collect();
+        let mut reference = pairs.clone();
+        reference.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let total: f64 = reference.iter().map(|p| p.1).sum();
+        let mut cumsum = 0.0;
+        let expected_cdf: Vec<f64> = reference
+            .iter()
+            .map(|p| {
+                cumsum += p.1;
+                cumsum / total
+            })
+            .collect();
+
+        let (y_sorted, cdf, sum_w) = sorted_weighted_cdf(pairs).unwrap();
+        let expected_y: Vec<f64> = reference.iter().map(|p| p.0).collect();
+        assert_eq!(y_sorted, expected_y);
+        assert_eq!(cdf, expected_cdf);
+        assert_eq!(sum_w, total);
+    }
+
+    #[test]
+    fn weighted_cdf_with_a_nan_value_keeps_the_sequential_order() {
+        let pairs = vec![(2.0, 1.0), (f64::NAN, 1.0), (1.0, 2.0), (2.0, 4.0)];
+        let mut reference = pairs.clone();
+        reference.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let (y_sorted, _, _) = sorted_weighted_cdf(pairs).unwrap();
+        let expected: Vec<f64> = reference.iter().map(|p| p.0).collect();
+        assert_eq!(format!("{y_sorted:?}"), format!("{expected:?}"));
     }
 
     /// Must agree on every design shape, including a `where=` filter's zero-weight rows.
