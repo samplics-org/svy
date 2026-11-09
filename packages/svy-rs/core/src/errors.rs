@@ -8,4 +8,4 @@ pub trait Coded: std::fmt::Display {
 }
 
 /// A polars failure inside a kernel: not the caller's input, and no finer code.
-pub const KERNEL_INTERNAL: &str = "KERNEL_INTERNAL";
+pub(crate) const KERNEL_INTERNAL: &str = "KERNEL_INTERNAL";

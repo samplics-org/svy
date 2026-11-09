@@ -11,7 +11,7 @@ use thiserror::Error;
 /// Each stratum's index and PSUs, and each (stratum, PSU)'s position within its stratum.
 type BrrStratumMap = (HashMap<i64, (i64, Vec<i64>)>, HashMap<(i64, i64), usize>);
 
-pub(crate) type Result<T> = std::result::Result<T, ReplicationError>;
+pub type Result<T> = std::result::Result<T, ReplicationError>;
 
 #[derive(Error, Debug, Clone)]
 pub enum ReplicationError {

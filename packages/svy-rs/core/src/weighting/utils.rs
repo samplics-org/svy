@@ -32,7 +32,7 @@ pub enum WeightingError {
     SvdNotConverged,
 }
 
-pub type Result<T> = std::result::Result<T, WeightingError>;
+pub(crate) type Result<T> = std::result::Result<T, WeightingError>;
 
 impl Coded for WeightingError {
     fn code(&self) -> &'static str {

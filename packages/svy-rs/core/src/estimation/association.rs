@@ -38,13 +38,13 @@ impl BivarMoments {
 
     /// Design-based covariance, on R's `svyvar` scale.
     #[inline]
-    pub fn cov(&self) -> f64 {
+    pub(crate) fn cov(&self) -> f64 {
         self.m_yx * self.kish_factor()
     }
 
     /// Design-based Pearson correlation; NaN for a constant variable, as `cov2cor` gives.
     #[inline]
-    pub fn corr(&self) -> f64 {
+    pub(crate) fn corr(&self) -> f64 {
         let denom = (self.m_yy * self.m_xx).sqrt();
         if denom > 0.0 {
             self.m_yx / denom
@@ -722,7 +722,7 @@ impl AssocKind {
     }
 
     /// Label carried into the result frame.
-    pub fn as_str(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             AssocKind::Corr => "corr",
             AssocKind::Cov => "cov",
@@ -734,7 +734,7 @@ impl AssocKind {
 // Kind-dispatching entry points
 // ---------------------------------------------------------------------------
 
-pub fn point_estimate_assoc(
+pub(crate) fn point_estimate_assoc(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -749,7 +749,7 @@ pub fn point_estimate_assoc(
     }
 }
 
-pub fn scores_assoc(
+pub(crate) fn scores_assoc(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -765,7 +765,7 @@ pub fn scores_assoc(
 }
 
 /// SRS reference variance for either association, over an optional domain.
-pub fn srs_variance_assoc_of(
+pub(crate) fn srs_variance_assoc_of(
     kind: AssocKind,
     y: &Float64Chunked,
     x: &Float64Chunked,
@@ -843,7 +843,7 @@ impl PairProducts {
     }
 
     /// The association under one replicate weight column, by six row-ordered dot products.
-    pub fn estimate(&self, rep_w: &[f64], kind: AssocKind) -> f64 {
+    pub(crate) fn estimate(&self, rep_w: &[f64], kind: AssocKind) -> f64 {
         let (mut sw, mut sa, mut sb) = (0.0f64, 0.0f64, 0.0f64);
         let (mut saa, mut sbb, mut sab) = (0.0f64, 0.0f64, 0.0f64);
 

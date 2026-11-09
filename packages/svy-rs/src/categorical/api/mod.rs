@@ -1,38 +1,22 @@
-//! PyO3 wrappers for the t-tests, rank tests and tabulation: frame I/O, domains and by-groups only.
+//! PyO3 wrappers for the t-tests, rank tests and tabulation; the frame-level work lives in `svy_core::categorical::frame`.
 
 use crate::errors::to_py_err;
-use std::collections::HashMap;
-use svy_core::categorical::error::{CResult, CategoricalError};
-
-use polars::prelude::*;
+use crate::estimation::into_contiguous;
+use polars::prelude::DataFrame;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
-use crate::estimation::into_contiguous;
-use svy_core::estimation::calib_sweep::{CalibSweep, make_calib};
-use svy_core::estimation::taylor::active_count;
-
-use svy_core::categorical::ranktest::{
-    RankScoreMethod, ranktest_k_sample, ranktest_k_sample_rep, ranktest_two_sample,
-    ranktest_two_sample_rep,
-};
-use svy_core::categorical::replicate::{RepSpec, replicate_cells};
-use svy_core::categorical::tabulation::{
-    cell_se, count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
-};
-use svy_core::categorical::ttest::{
-    ttest_one_sample, ttest_one_sample_domain, ttest_one_sample_rep, ttest_two_sample,
-    ttest_two_sample_rep,
-};
+use svy_core::categorical::error::CategoricalError;
+use svy_core::categorical::frame::*;
+use svy_core::categorical::replicate::RepSpec;
+use svy_core::estimation::calib_sweep::make_calib;
 
 mod common;
+use common::*;
 mod ranktest;
 mod tabulate;
-#[cfg(test)]
-mod tests;
 mod ttest;
 
-pub(crate) use common::*;
 pub(crate) use ranktest::*;
 pub(crate) use tabulate::*;
 pub(crate) use ttest::*;

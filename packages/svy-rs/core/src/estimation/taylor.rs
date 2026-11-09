@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SingletonMethod {
+pub(crate) enum SingletonMethod {
     None,   // Default: Treat n=1 as 0 variance contribution
     Center, // Grand mean centering: (z_i - z_bar)^2
     Scale,  // n=1 contributes 0; the total is scaled by nstrat/nokstrat
@@ -47,8 +47,8 @@ impl SingletonMethod {
 /// A singleton method and whether it also applies to strata with one PSU in the domain.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SingletonRule {
-    pub method: SingletonMethod,
-    pub domains: bool,
+    pub(crate) method: SingletonMethod,
+    pub(crate) domains: bool,
 }
 
 impl SingletonRule {
@@ -158,7 +158,7 @@ pub fn point_estimate_mean(y: &Float64Chunked, weights: &Float64Chunked) -> ERes
     Ok(sum_wy / sum_w)
 }
 
-pub fn point_estimate_mean_domain(
+pub(crate) fn point_estimate_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
@@ -195,7 +195,7 @@ pub fn point_estimate_mean_domain(
     Ok(sum_wy / sum_w)
 }
 
-pub fn point_estimate_total(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<f64> {
+pub(crate) fn point_estimate_total(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<f64> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         for i in 0..ys.len() {
@@ -209,7 +209,7 @@ pub fn point_estimate_total(y: &Float64Chunked, weights: &Float64Chunked) -> ERe
         .sum())
 }
 
-pub fn point_estimate_total_domain(
+pub(crate) fn point_estimate_total_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
@@ -230,7 +230,7 @@ pub fn point_estimate_total_domain(
         .sum())
 }
 
-pub fn point_estimate_ratio(
+pub(crate) fn point_estimate_ratio(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -268,7 +268,7 @@ pub fn point_estimate_ratio(
     Ok(sum_wy / sum_wx)
 }
 
-pub fn point_estimate_ratio_domain(
+pub(crate) fn point_estimate_ratio_domain(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -466,7 +466,7 @@ pub fn scores_mean(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Floa
 }
 
 /// `scores_mean` as the variance's array, nulls as 0.0, without the `Float64Chunked` round-trip.
-pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
+pub(crate) fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         let mut sum_wy = 0.0f64;
         let mut sum_w = 0.0f64;
@@ -489,7 +489,7 @@ pub fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<
         .collect())
 }
 
-pub fn scores_mean_domain(
+pub(crate) fn scores_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
@@ -558,7 +558,7 @@ pub fn scores_mean_domain(
 }
 
 /// [`scores_total`] for the variance, nulls as 0.0, without the `Float64Chunked` round-trip.
-pub fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
+pub(crate) fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Vec<f64>> {
     if let Some((ys, ws)) = cont_pair(y, weights) {
         return Ok(ys.iter().zip(ws).map(|(y, w)| w * y).collect());
     }
@@ -568,7 +568,10 @@ pub fn scores_total_arr(y: &Float64Chunked, weights: &Float64Chunked) -> EResult
         .collect())
 }
 
-pub fn scores_total(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Float64Chunked> {
+pub(crate) fn scores_total(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+) -> EResult<Float64Chunked> {
     let scores: Vec<Option<f64>> = y
         .iter()
         .zip(weights.iter())
@@ -580,7 +583,7 @@ pub fn scores_total(y: &Float64Chunked, weights: &Float64Chunked) -> EResult<Flo
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
-pub fn scores_total_domain(
+pub(crate) fn scores_total_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
@@ -605,7 +608,7 @@ pub fn scores_total_domain(
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
-pub fn scores_ratio(
+pub(crate) fn scores_ratio(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -638,7 +641,7 @@ pub fn scores_ratio(
     Ok(Float64Chunked::from_slice_options("scores".into(), &scores))
 }
 
-pub fn scores_ratio_domain(
+pub(crate) fn scores_ratio_domain(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -1342,7 +1345,7 @@ fn compute_stage2_variance(
 // ============================================================================
 
 /// Design-only Taylor variance intermediates, built once and reused across domains and by-groups.
-pub struct TaylorDesign {
+pub(crate) struct TaylorDesign {
     sm_enum: SingletonMethod,
     /// The method also applies to strata with one PSU in the domain.
     domain_rule: bool,
@@ -1369,14 +1372,14 @@ struct Stage2 {
 }
 
 impl TaylorDesign {
-    pub fn with_calib(mut self, calib: Option<CalibSweep>) -> Self {
+    pub(crate) fn with_calib(mut self, calib: Option<CalibSweep>) -> Self {
         self.calib = calib;
         self
     }
 
     /// The domain's rows ([`row_mask`]) when a stratified singleton rule depends on which strata it
     /// reaches; `None` otherwise, and when calibrated (nonzero scores outside the domain, as in R).
-    pub fn domain_rows(
+    pub(crate) fn domain_rows(
         &self,
         n: usize,
         rows: Option<&BooleanChunked>,
@@ -1389,7 +1392,7 @@ impl TaylorDesign {
     }
 }
 
-pub fn build_taylor_design(
+pub(crate) fn build_taylor_design(
     strata: Option<&Column>,
     psu: Option<&Column>,
     ssu: Option<&Column>,
@@ -1527,7 +1530,7 @@ pub(crate) fn taylor_variance_apply(scores_arr: &[f64], d: &TaylorDesign) -> f64
 }
 
 /// [`taylor_variance_apply`] for a domain: `active` is [`TaylorDesign::domain_rows`].
-pub fn taylor_variance_apply_in(
+pub(crate) fn taylor_variance_apply_in(
     scores_arr: &[f64],
     d: &TaylorDesign,
     active: Option<&[bool]>,
@@ -1668,7 +1671,7 @@ pub(crate) fn singleton_rows(
 }
 
 /// The boolean domain-row column `col` of `df` ([`row_mask`]'s `rows`).
-pub fn rows_column(df: &DataFrame, col: Option<&str>) -> EResult<Option<BooleanChunked>> {
+pub(crate) fn rows_column(df: &DataFrame, col: Option<&str>) -> EResult<Option<BooleanChunked>> {
     col.map(|c| {
         let s = df.column(c)?.as_materialized_series();
         let b = match s.dtype() {
@@ -1682,7 +1685,7 @@ pub fn rows_column(df: &DataFrame, col: Option<&str>) -> EResult<Option<BooleanC
 
 /// k×k covariance of k estimates from their score columns, under `taylor_variance_apply`'s rules.
 /// The diagonal matches it only up to summation order: callers needing exact agreement keep that.
-pub fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec<Vec<f64>> {
+pub(crate) fn taylor_covariance_apply(score_cols: &[Vec<f64>], d: &TaylorDesign) -> Vec<Vec<f64>> {
     taylor_covariance_apply_in(score_cols, d, None)
 }
 
@@ -1707,7 +1710,7 @@ fn present_cols<I: Iterator<Item = f64>>(k: usize, values: impl Fn(usize) -> I) 
 
 /// [`taylor_covariance_apply`] for estimates of one domain. Different domains keep the whole frame,
 /// as R's `svyby(covmat=TRUE)` does.
-pub fn taylor_covariance_apply_in(
+pub(crate) fn taylor_covariance_apply_in(
     score_cols: &[Vec<f64>],
     d: &TaylorDesign,
     active: Option<&[bool]>,
@@ -2047,7 +2050,7 @@ pub fn taylor_covariance_apply_in(
     cov
 }
 
-pub fn degrees_of_freedom(
+pub(crate) fn degrees_of_freedom(
     weights: &Float64Chunked,
     strata: Option<&Column>,
     psu: Option<&Column>,
@@ -2087,7 +2090,7 @@ pub(crate) fn degrees_of_freedom_in_domain(
 }
 
 /// Design df from a [`TaylorDesign`]'s codes, sparing a second densification of the same columns.
-pub fn degrees_of_freedom_from_design(
+pub(crate) fn degrees_of_freedom_from_design(
     weights: &Float64Chunked,
     design: &TaylorDesign,
     domain: Option<&BooleanChunked>,
@@ -2148,7 +2151,7 @@ fn active_mask(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> Vec
 
 /// Domain respondents (nonzero weight, in `domain`): the Korn–Graubard `n` of the proportion CIs.
 /// `where=` arrives as zeroed weights, so a row count would include out-of-domain rows.
-pub fn active_count(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> u32 {
+pub(crate) fn active_count(weights: &Float64Chunked, domain: Option<&BooleanChunked>) -> u32 {
     match domain {
         None => match weights_slice(weights) {
             Some(ws) => ws.iter().filter(|&&w| is_active(Some(w))).count() as u32,
@@ -2252,7 +2255,7 @@ fn df_shared_psu_codes(active: &[bool], str_idx: &[u32], n_strata: u32, psu_idx:
 
 /// Woodruff `(estimate, var_p, se_p)` per prob, sorting once; all-NaN where undefined.
 /// With `domain_mask`, scores outside are zero, so the variance still spans the full design.
-pub fn quantiles_woodruff(
+pub(crate) fn quantiles_woodruff(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: Option<&BooleanChunked>,
@@ -2303,7 +2306,7 @@ impl SrsRef {
     /// The FPC, NaN when degenerate: it runs on every call, so Python raises only if deff is asked.
     /// The 1e-9 floor absorbs weights normalized to `n` (~1e-12 off); near-census FPCs are ~1e-6.
     #[inline]
-    pub fn fpc(&self, n: f64, sum_w: f64) -> f64 {
+    pub(crate) fn fpc(&self, n: f64, sum_w: f64) -> f64 {
         match self {
             SrsRef::WithReplacement => 1.0,
             SrsRef::WithoutReplacement { pop_total } => {
@@ -2379,7 +2382,7 @@ pub fn srs_variance_mean(
     srs_mean_from(&yv, &wv, srs)
 }
 
-pub fn srs_variance_mean_domain(
+pub(crate) fn srs_variance_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
@@ -2422,7 +2425,7 @@ pub fn srs_variance_mean_domain(
     Ok((s2_y / n) * srs.fpc(n, sum_w))
 }
 
-pub fn srs_variance_total(
+pub(crate) fn srs_variance_total(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     srs: SrsRef,
@@ -2459,7 +2462,7 @@ fn srs_total_from(yv: &[f64], wv: &[f64], srs: SrsRef) -> EResult<f64> {
     Ok(((sum_w.powi(2) / n) * s2_y) * srs.fpc(n, sum_w))
 }
 
-pub fn srs_variance_total_domain(
+pub(crate) fn srs_variance_total_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
@@ -2492,7 +2495,7 @@ pub fn srs_variance_total_domain(
     srs_total_from(&yv, &wv, srs)
 }
 
-pub fn srs_variance_ratio(
+pub(crate) fn srs_variance_ratio(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,
@@ -2534,7 +2537,7 @@ pub fn srs_variance_ratio(
     Ok((s2_e / (n * xbar.powi(2))) * srs.fpc(n, sum_w))
 }
 
-pub fn srs_variance_ratio_domain(
+pub(crate) fn srs_variance_ratio_domain(
     y: &Float64Chunked,
     x: &Float64Chunked,
     weights: &Float64Chunked,

@@ -18,15 +18,15 @@ use crate::estimation::taylor::{
 /// Result of a weighted OLS fit with influence functions.
 #[allow(dead_code)]
 pub(crate) struct WolsResult {
-    pub beta: Vec<f64>,
-    pub fitted: Vec<f64>,
-    pub residuals: Vec<f64>,
+    pub(crate) beta: Vec<f64>,
+    pub(crate) fitted: Vec<f64>,
+    pub(crate) residuals: Vec<f64>,
     /// (X'WX)^{-1}, row-major k x k
-    pub cov_unscaled: Vec<f64>,
+    pub(crate) cov_unscaled: Vec<f64>,
     /// Row-major n x k: influence of obs i on coefficient j at i * k + j
-    pub influence: Vec<f64>,
-    pub n: usize,
-    pub k: usize,
+    pub(crate) influence: Vec<f64>,
+    pub(crate) n: usize,
+    pub(crate) k: usize,
 }
 
 // ============================================================================
