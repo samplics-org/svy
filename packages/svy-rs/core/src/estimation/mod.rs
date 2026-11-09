@@ -7,7 +7,9 @@ pub mod error;
 
 pub mod association;
 pub mod replication;
+pub mod replication_frame;
 pub mod taylor;
+pub mod taylor_frame;
 
 // Only what categorical/tabulation.rs uses; anything more warns as an unused import.
 pub(crate) use taylor::{
