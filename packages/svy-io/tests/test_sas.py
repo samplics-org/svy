@@ -166,6 +166,26 @@ def test_zip_files_are_read():
     assert df_zip.equals(df_plain)
 
 
+@pytest.mark.parametrize(
+    ("fname", "signature"),
+    [
+        ("compressed_rle.sas7bdat", b"SASYZCRL"),  # COMPRESS=YES / CHAR
+        ("compressed_rdc.sas7bdat", b"SASYZCR2"),  # COMPRESS=BINARY
+    ],
+)
+def test_compressed_sas7bdat_matches_reference(fname, signature):
+    # Expected values: pandas' reader on the uncompressed original, dates as SAS day counts.
+    assert signature in (DATA / fname).read_bytes()
+    expected = pl.read_csv(tpath("compressed_expected.csv")).with_columns(
+        pl.col(pl.String).fill_null("")
+    )
+
+    df, _ = read_sas(tpath(fname))
+
+    assert df.schema == expected.schema
+    assert df.equals(expected)
+
+
 # ─────────────────────────── Row skipping ───────────────────────────
 
 
