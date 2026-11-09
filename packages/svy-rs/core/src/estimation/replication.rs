@@ -2,7 +2,7 @@
 
 use crate::estimation::error::EResult;
 use polars::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use super::taylor::{SvyQuantileMethod, quantile_in_bracket, weighted_quantile};
 
@@ -411,7 +411,7 @@ pub(crate) fn matrix_ratio_estimates_cols(
 
 /// Index a categorical column to 0..K-1: `(indices, domain_names, n_domains)`.
 pub(crate) fn index_domains(by: &StringChunked) -> (Vec<u32>, Vec<String>, usize) {
-    let mut map: HashMap<&str, u32> = HashMap::new();
+    let mut map: FxHashMap<&str, u32> = FxHashMap::default();
     let mut names: Vec<String> = Vec::new();
     let mut next_idx = 0u32;
 
@@ -782,7 +782,7 @@ pub(crate) fn matrix_prop_estimates(
     domain_mask: Option<&[f64]>,
     normalize: bool,
 ) -> (Vec<i64>, Vec<f64>, Vec<Vec<f64>>) {
-    let mut level_map: HashMap<i64, usize> = HashMap::new();
+    let mut level_map: FxHashMap<i64, usize> = FxHashMap::default();
     let mut levels: Vec<i64> = Vec::new();
 
     for &val in y {
@@ -841,7 +841,7 @@ pub(crate) fn matrix_prop_estimates(
 
 /// Sorted category levels and the per-row level index for integer category data.
 fn prop_level_index(y: &[i64]) -> (Vec<i64>, Vec<usize>) {
-    let mut level_map: HashMap<i64, usize> = HashMap::new();
+    let mut level_map: FxHashMap<i64, usize> = FxHashMap::default();
     let mut levels: Vec<i64> = Vec::new();
     for &val in y {
         if let std::collections::hash_map::Entry::Vacant(e) = level_map.entry(val) {
@@ -925,7 +925,7 @@ pub(crate) fn matrix_prop_estimates_str_cols(
     domain_mask: Option<&[f64]>,
     normalize: bool,
 ) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
-    let mut level_map: HashMap<&str, usize> = HashMap::new();
+    let mut level_map: FxHashMap<&str, usize> = FxHashMap::default();
     let mut levels: Vec<String> = Vec::new();
     for val in y {
         if !level_map.contains_key(val.as_str()) {
@@ -999,7 +999,7 @@ pub(crate) fn matrix_prop_by_domain(
     n_reps: usize,
     normalize: bool,
 ) -> LevelReps<i64> {
-    let mut level_map: HashMap<i64, usize> = HashMap::new();
+    let mut level_map: FxHashMap<i64, usize> = FxHashMap::default();
     let mut levels: Vec<i64> = Vec::new();
 
     for &val in y {
@@ -1088,7 +1088,7 @@ pub(crate) fn matrix_prop_estimates_str(
     domain_mask: Option<&[f64]>,
     normalize: bool,
 ) -> (Vec<String>, Vec<f64>, Vec<Vec<f64>>) {
-    let mut level_map: HashMap<&str, usize> = HashMap::new();
+    let mut level_map: FxHashMap<&str, usize> = FxHashMap::default();
     let mut levels: Vec<String> = Vec::new();
 
     for val in y {
@@ -1157,7 +1157,7 @@ pub(crate) fn matrix_prop_by_domain_str(
     n_reps: usize,
     normalize: bool,
 ) -> LevelReps<String> {
-    let mut level_map: HashMap<&str, usize> = HashMap::new();
+    let mut level_map: FxHashMap<&str, usize> = FxHashMap::default();
     let mut levels: Vec<String> = Vec::new();
 
     for val in y {
