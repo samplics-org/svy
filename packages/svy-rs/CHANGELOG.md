@@ -4,6 +4,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-11-09
+
 ### Added
 
 - `taylor_quantile`, `taylor_quantile_multi`, `taylor_median` and `taylor_median_multi` take `return_cdf`: with it they return `(frame, cdfs)`, where `cdfs` lists each domain's `(label, (values_sorted, cdf))` (label `None` when ungrouped, one entry per variable for the multi forms; `None` in place of the arrays when the domain has no weight). These are the arrays the estimate came from, moved into numpy without a copy, so svy inverts them for the Woodruff limits instead of sorting the data again.
@@ -356,7 +358,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 Baseline for this changelog. For earlier history, see the [Git tags](https://github.com/samplics-org/svy/tags).
 
-[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.20.0...HEAD
+[Unreleased]: https://github.com/samplics-org/svy/compare/svy-rs-v0.21.0...HEAD
+[0.21.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.21.0
 [0.20.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.20.0
 [0.19.1]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.19.1
 [0.19.0]: https://github.com/samplics-org/svy/releases/tag/svy-rs-v0.19.0
