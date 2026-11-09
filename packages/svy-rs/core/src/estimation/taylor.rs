@@ -2618,19 +2618,6 @@ pub(crate) fn taylor_variance_matrix(
     fpc: Option<&Float64Chunked>,
     singleton_method: Option<&str>,
 ) -> EResult<Vec<Vec<f64>>> {
-    taylor_variance_matrix_in(score_columns, strata, psu, fpc, singleton_method, None)
-}
-
-/// [`taylor_variance_matrix`] for estimates of one domain: `active` marks its
-/// rows (see [`TaylorDesign::domain_rows`]). Stage 1 only.
-pub(crate) fn taylor_variance_matrix_in(
-    score_columns: &[Float64Chunked],
-    strata: Option<&Column>,
-    psu: Option<&Column>,
-    fpc: Option<&Float64Chunked>,
-    singleton_method: Option<&str>,
-    active: Option<&[bool]>,
-) -> EResult<Vec<Vec<f64>>> {
     let k = score_columns.len();
     if k == 0 {
         return Ok(vec![]);
@@ -2643,7 +2630,7 @@ pub(crate) fn taylor_variance_matrix_in(
         .iter()
         .map(|c| c.iter().map(|s| s.unwrap_or(0.0)).collect())
         .collect();
-    Ok(taylor_covariance_apply_in(&cols, &design, active))
+    Ok(taylor_covariance_apply_in(&cols, &design, None))
 }
 
 // ============================================================================

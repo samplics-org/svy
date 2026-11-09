@@ -8,11 +8,15 @@ use faer::prelude::Reborrow;
 use polars::prelude::*;
 
 use crate::estimation::calib_sweep::{CalibSweep, sweep_scores};
-use crate::estimation::{
-    degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
-    singleton_domain_rows, srs_variance_mean, taylor::SrsRef, taylor_variance_in,
-    taylor_variance_matrix_in,
+use crate::estimation::taylor::{
+    SrsRef, TaylorDesign, build_taylor_design, degrees_of_freedom_from_design, mask_flags,
+    taylor_covariance_apply_in, taylor_variance_apply_in,
 };
+use crate::estimation::{
+    point_estimate_mean, point_estimate_total, scores_mean, scores_total, singleton_domain_rows,
+    srs_variance_mean,
+};
+use rustc_hash::FxHashMap;
 
 /// Levels, proportions, SEs, covariance matrix, deffs and df.
 type PropTable = (
@@ -196,77 +200,141 @@ fn beta_cf(x: f64, a: f64, b: f64) -> f64 {
 // Proportion estimation with covariance matrix
 // ============================================================================
 
-/// Proportions of every level with one joint Taylor covariance, as R does (no per-level polarization).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn estimate_proportions(
-    y: &StringChunked,
-    weights: &Float64Chunked,
-    strata: Option<&Column>,
-    psu: Option<&Column>,
-    ssu: Option<&Column>,
-    fpc: Option<&Float64Chunked>,
-    fpc_ssu: Option<&Float64Chunked>,
-    singleton_method: Option<&str>,
-    calib: Option<&CalibSweep>,
-    domain: Option<&BooleanChunked>,
-) -> CResult<PropTable> {
-    let levels = domain_levels(y, domain)?;
+/// The Taylor design every cell of one table shares, built once instead of once per cell.
+pub(crate) struct TabDesign {
+    design: TaylorDesign,
+    // The cell covariance is stage 1 only; with an SSU it needs a design without stage 2.
+    stage1: Option<TaylorDesign>,
+    active: Option<Vec<bool>>,
+    df: u32,
+}
 
-    let k = levels.len();
-    let df_val = degrees_of_freedom(weights, strata, psu)?;
-
-    let sm = singleton_method;
-    let active =
-        singleton_domain_rows(sm, calib.is_some(), strata.is_some(), weights.len(), domain)?;
-
-    let n_rows = y.len();
-    let level_map: std::collections::HashMap<&str, usize> = levels
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.as_str(), i))
-        .collect();
-
-    // indicators[j][i]: None marks a missing key.
-    let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; k];
-    for (i, opt_val) in y.iter().enumerate() {
-        // Out-of-domain rows stay at 0 to keep the PSU structure; a null key there is not missing data.
-        if !in_domain(domain, i) {
-            continue;
-        }
-        match opt_val {
-            None => {
-                for ind in indicators.iter_mut().take(k) {
-                    ind[i] = None;
-                }
-            }
-            Some(val) => {
-                if let Some(&j) = level_map.get(val) {
-                    indicators[j][i] = Some(1.0);
-                }
-            }
-        }
+impl TabDesign {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build(
+        weights: &Float64Chunked,
+        strata: Option<&Column>,
+        psu: Option<&Column>,
+        ssu: Option<&Column>,
+        fpc: Option<&Float64Chunked>,
+        fpc_ssu: Option<&Float64Chunked>,
+        singleton_method: Option<&str>,
+        calibrated: bool,
+        domain: Option<&BooleanChunked>,
+    ) -> CResult<Self> {
+        let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+        let stage1 = ssu
+            .map(|_| build_taylor_design(strata, psu, None, fpc, None, singleton_method))
+            .transpose()?;
+        let df = degrees_of_freedom_from_design(weights, &design, None);
+        let active = singleton_domain_rows(
+            singleton_method,
+            calibrated,
+            strata.is_some(),
+            weights.len(),
+            domain,
+        )?;
+        Ok(Self {
+            design,
+            stage1,
+            active,
+            df,
+        })
     }
 
+    fn variance(&self, scores: &[f64]) -> f64 {
+        if scores.is_empty() {
+            return 0.0;
+        }
+        taylor_variance_apply_in(scores, &self.design, self.active.as_deref())
+    }
+
+    fn covariance(&self, score_columns: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        let stage1 = self.stage1.as_ref().unwrap_or(&self.design);
+        taylor_covariance_apply_in(score_columns, stage1, self.active.as_deref())
+    }
+}
+
+/// Each row's cell, read once for every cell's indicator.
+pub(crate) struct LevelCodes {
+    codes: Vec<u32>,
+    has_missing: bool,
+}
+
+impl LevelCodes {
+    /// 0 in every indicator: out of the domain (its PSU still counts), or a key outside `levels`.
+    const ZERO: u32 = u32::MAX - 1;
+    /// Missing in every indicator: a null key inside the domain.
+    const MISSING: u32 = u32::MAX;
+
+    pub(crate) fn new(
+        y: &StringChunked,
+        domain: Option<&BooleanChunked>,
+        levels: &[String],
+    ) -> Self {
+        let index: FxHashMap<&str, u32> = levels
+            .iter()
+            .enumerate()
+            .map(|(j, s)| (s.as_str(), j as u32))
+            .collect();
+        let in_domain = domain.map(mask_flags);
+        let mut has_missing = false;
+        let codes = y
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                if in_domain.as_ref().is_some_and(|m| !m[i]) {
+                    return Self::ZERO;
+                }
+                match v {
+                    None => {
+                        has_missing = true;
+                        Self::MISSING
+                    }
+                    Some(s) => index.get(s).copied().unwrap_or(Self::ZERO),
+                }
+            })
+            .collect();
+        Self { codes, has_missing }
+    }
+
+    fn indicator(&self, j: usize) -> Float64Chunked {
+        let j = j as u32;
+        if self.has_missing {
+            let ind: Vec<Option<f64>> = self
+                .codes
+                .iter()
+                .map(|&c| (c != Self::MISSING).then(|| f64::from(c == j)))
+                .collect();
+            return Float64Chunked::from_slice_options("ind".into(), &ind);
+        }
+        let ind: Vec<f64> = self.codes.iter().map(|&c| f64::from(c == j)).collect();
+        Float64Chunked::from_vec("ind".into(), ind)
+    }
+}
+
+/// Proportions of every level with one joint Taylor covariance, as R does (no per-level polarization).
+pub(crate) fn estimate_proportions(
+    levels: Vec<String>,
+    codes: &LevelCodes,
+    weights: &Float64Chunked,
+    tab: &TabDesign,
+    calib: Option<&CalibSweep>,
+) -> CResult<PropTable> {
+    let k = levels.len();
     let mut proportions = Vec::with_capacity(k);
-    let mut score_columns: Vec<Float64Chunked> = Vec::with_capacity(k);
+    let mut score_columns: Vec<Vec<f64>> = Vec::with_capacity(k);
     let mut deff_vec = Vec::with_capacity(k);
 
-    for (j, _lvl) in levels.iter().enumerate() {
-        let ind_ca = Float64Chunked::from_slice_options("ind".into(), &indicators[j]);
+    for j in 0..k {
+        let ind_ca = codes.indicator(j);
 
         let est = point_estimate_mean(&ind_ca, weights)?;
-        let scores = sweep_scores(&scores_mean(&ind_ca, weights)?, calib);
-
-        let var_scalar = taylor_variance_in(
-            &scores,
-            strata,
-            psu,
-            ssu,
-            fpc,
-            fpc_ssu,
-            sm,
-            active.as_deref(),
-        )?;
+        let scores: Vec<f64> = sweep_scores(&scores_mean(&ind_ca, weights)?, calib)
+            .iter()
+            .map(|s| s.unwrap_or(0.0))
+            .collect();
+        let var_scalar = tab.variance(&scores);
         let srs_var = srs_variance_mean(
             &ind_ca,
             weights,
@@ -283,11 +351,11 @@ pub(crate) fn estimate_proportions(
         deff_vec.push(deff);
     }
 
-    let cov = taylor_variance_matrix_in(&score_columns, strata, psu, fpc, sm, active.as_deref())?;
+    let cov = tab.covariance(&score_columns);
 
     let ses: Vec<f64> = (0..k).map(|j| cell_se(proportions[j], cov[j][j])).collect();
 
-    Ok((levels, proportions, ses, cov, deff_vec, df_val))
+    Ok((levels, proportions, ses, cov, deff_vec, tab.df))
 }
 
 /// SE of a cell share, NaN when the share is: `f64::max` turns a NaN variance into 0.
@@ -332,70 +400,24 @@ pub(crate) fn domain_levels(
 // ============================================================================
 
 /// Compute weighted totals and SEs for each level.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn estimate_totals(
-    y: &StringChunked,
+    n_levels: usize,
+    codes: &LevelCodes,
     weights: &Float64Chunked,
-    strata: Option<&Column>,
-    psu: Option<&Column>,
-    ssu: Option<&Column>,
-    fpc: Option<&Float64Chunked>,
-    fpc_ssu: Option<&Float64Chunked>,
-    singleton_method: Option<&str>,
+    tab: &TabDesign,
     calib: Option<&CalibSweep>,
-    levels: &[String],
-    domain: Option<&BooleanChunked>,
 ) -> CResult<(Vec<f64>, Vec<f64>)> {
-    let mut totals = Vec::with_capacity(levels.len());
-    let mut total_ses = Vec::with_capacity(levels.len());
-    let active = singleton_domain_rows(
-        singleton_method,
-        calib.is_some(),
-        strata.is_some(),
-        weights.len(),
-        domain,
-    )?;
+    let mut totals = Vec::with_capacity(n_levels);
+    let mut total_ses = Vec::with_capacity(n_levels);
 
-    let n_rows = y.len();
-    let level_map: std::collections::HashMap<&str, usize> = levels
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.as_str(), i))
-        .collect();
-    let kk = levels.len();
-    let mut indicators: Vec<Vec<Option<f64>>> = vec![vec![Some(0.0); n_rows]; kk];
-    for (i, opt_val) in y.iter().enumerate() {
-        if !in_domain(domain, i) {
-            continue;
-        }
-        match opt_val {
-            None => {
-                for ind in indicators.iter_mut().take(kk) {
-                    ind[i] = None;
-                }
-            }
-            Some(val) => {
-                if let Some(&j) = level_map.get(val) {
-                    indicators[j][i] = Some(1.0);
-                }
-            }
-        }
-    }
-
-    for ind in indicators.iter().take(kk) {
-        let ind_ca = Float64Chunked::from_slice_options("ind".into(), ind);
+    for j in 0..n_levels {
+        let ind_ca = codes.indicator(j);
         let est = point_estimate_total(&ind_ca, weights)?;
-        let scores = sweep_scores(&scores_total(&ind_ca, weights)?, calib);
-        let var = taylor_variance_in(
-            &scores,
-            strata,
-            psu,
-            ssu,
-            fpc,
-            fpc_ssu,
-            singleton_method,
-            active.as_deref(),
-        )?;
+        let scores: Vec<f64> = sweep_scores(&scores_total(&ind_ca, weights)?, calib)
+            .iter()
+            .map(|s| s.unwrap_or(0.0))
+            .collect();
+        let var = tab.variance(&scores);
         totals.push(est);
         total_ses.push(var.max(0.0).sqrt());
     }
@@ -610,6 +632,57 @@ mod tests {
 
     fn all_nan(stats: &[f64]) -> bool {
         stats.iter().all(|v| v.is_nan())
+    }
+
+    // Reference: the standalone kernels, building the design per cell as tabulation once did.
+    #[test]
+    fn shared_design_keeps_stage_two_in_the_deff_and_out_of_the_covariance() {
+        use crate::estimation::taylor::{
+            degrees_of_freedom, taylor_variance, taylor_variance_matrix,
+        };
+        use crate::test_fixtures::{COL, G3, N, W, floats, psu, strata};
+
+        let labels = ["a", "b", "c"];
+        let y = StringChunked::from_iter(COL.iter().map(|&c| Some(labels[c as usize])));
+        let w = floats("w", &W);
+        let (st, ps) = (strata(), psu());
+        let ssu = Column::from(UInt32Chunked::from_slice("ssu".into(), &G3).into_series());
+        let fpc = floats("fpc", &[0.6; N]);
+        let fpc_ssu = floats("fpc_ssu", &[0.5; N]);
+
+        let levels = domain_levels(&y, None).unwrap();
+        let codes = LevelCodes::new(&y, None, &levels);
+        let (s, p, u) = (Some(&st), Some(&ps), Some(&ssu));
+        let tab =
+            TabDesign::build(&w, s, p, u, Some(&fpc), Some(&fpc_ssu), None, false, None).unwrap();
+        let (_, props, ses, cov, deffs, df) =
+            estimate_proportions(levels.clone(), &codes, &w, &tab, None).unwrap();
+
+        let mut score_cols = Vec::new();
+        let mut full_vars = Vec::new();
+        for (j, lvl) in levels.iter().enumerate() {
+            let ind: Vec<f64> = y
+                .iter()
+                .map(|v| f64::from(v == Some(lvl.as_str())))
+                .collect();
+            let ind = floats("ind", &ind);
+            let scores = scores_mean(&ind, &w).unwrap();
+            let full = taylor_variance(&scores, s, p, u, Some(&fpc), Some(&fpc_ssu), None).unwrap();
+            let srs = srs_variance_mean(&ind, &w, SrsRef::WithoutReplacement { pop_total: None })
+                .unwrap();
+            assert_eq!(props[j], point_estimate_mean(&ind, &w).unwrap());
+            assert_eq!(deffs[j], full / srs);
+            score_cols.push(scores);
+            full_vars.push(full);
+        }
+        let stage1 = taylor_variance_matrix(&score_cols, s, p, Some(&fpc), None).unwrap();
+        assert_eq!(cov, stage1);
+        for j in 0..levels.len() {
+            assert_eq!(ses[j], stage1[j][j].sqrt());
+            // Stage 2 must matter here, or the test could not tell the two designs apart.
+            assert!(full_vars[j] > stage1[j][j]);
+        }
+        assert_eq!(df, degrees_of_freedom(&w, s, p).unwrap());
     }
 
     #[test]

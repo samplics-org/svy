@@ -105,6 +105,7 @@ pub fn compute_tabulate(
         }
         None => None,
     };
+    let mut taylor_cells: Option<(LevelCodes, TabDesign)> = None;
     let (levels, proportions, ses, cov_matrix, deff_vec, df_val) = match &rep_cells {
         Some((levels, cells)) => {
             let k = levels.len();
@@ -120,19 +121,24 @@ pub fn compute_tabulate(
                 rep.map_or(0.0, |s| s.df.max(0.0)),
             )
         }
-        None => estimate_proportions(
-            y_effective,
-            weights,
-            strata.as_ref(),
-            psu.as_ref(),
-            ssu.as_ref(),
-            fpc.as_ref(),
-            fpc_ssu.as_ref(),
-            singleton_method,
-            calib,
-            domain.as_ref(),
-        )
-        .map(|(l, p, s, c, d, df)| (l, p, s, c, d, df as f64))?,
+        None => {
+            let levels = domain_levels(y_effective, domain.as_ref())?;
+            let codes = LevelCodes::new(y_effective, domain.as_ref(), &levels);
+            let tab = TabDesign::build(
+                weights,
+                strata.as_ref(),
+                psu.as_ref(),
+                ssu.as_ref(),
+                fpc.as_ref(),
+                fpc_ssu.as_ref(),
+                singleton_method,
+                calib.is_some(),
+                domain.as_ref(),
+            )?;
+            let (l, p, s, c, d, df) = estimate_proportions(levels, &codes, weights, &tab, calib)?;
+            taylor_cells = Some((codes, tab));
+            (l, p, s, c, d, df as f64)
+        }
     };
 
     let k = levels.len();
@@ -161,20 +167,8 @@ pub fn compute_tabulate(
             .map(|j| cells.total_cov[j][j].max(0.0).sqrt())
             .collect();
         (cells.totals.clone(), ses)
-    } else if compute_totals {
-        estimate_totals(
-            y_effective,
-            weights,
-            strata.as_ref(),
-            psu.as_ref(),
-            ssu.as_ref(),
-            fpc.as_ref(),
-            fpc_ssu.as_ref(),
-            singleton_method,
-            calib,
-            &levels,
-            domain.as_ref(),
-        )?
+    } else if let (true, Some((codes, tab))) = (compute_totals, &taylor_cells) {
+        estimate_totals(levels.len(), codes, weights, tab, calib)?
     } else {
         (proportions.clone(), ses.clone())
     };

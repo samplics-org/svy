@@ -13,8 +13,8 @@ pub mod taylor_frame;
 
 // Only what categorical/tabulation.rs uses; anything more warns as an unused import.
 pub(crate) use taylor::{
-    degrees_of_freedom, point_estimate_mean, point_estimate_total, scores_mean, scores_total,
-    singleton_domain_rows, srs_variance_mean, taylor_variance_in, taylor_variance_matrix_in,
+    point_estimate_mean, point_estimate_total, scores_mean, scores_total, singleton_domain_rows,
+    srs_variance_mean,
 };
 
 use crate::estimation::error::EResult;
