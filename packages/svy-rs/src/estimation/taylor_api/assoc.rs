@@ -105,7 +105,9 @@ fn compute_assoc(
     let by_str = by_col
         .map(|c| df.column(c).and_then(|s| s.str()))
         .transpose()?;
-    let unique_groups = by_str.map(crate::estimation::sorted_groups).transpose()?;
+    let unique_groups = by_str
+        .map(svy_core::estimation::sorted_groups)
+        .transpose()?;
     let groups: Vec<Option<&str>> = match unique_groups.as_ref() {
         Some(u) => u.iter().flatten().map(Some).collect(),
         None => vec![None],

@@ -3,15 +3,15 @@
 //! - Without `by_col` or `where_col` the result is one element with level "", so Python handles every case alike.
 
 use crate::errors::to_py_err;
-use crate::regression::error::RegressionError;
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
+use svy_core::regression::error::RegressionError;
 
-use crate::estimation::calib_sweep::make_calib;
 use crate::estimation::into_contiguous;
-use crate::estimation::taylor::SingletonRule;
-use crate::regression::glm::{
+use svy_core::estimation::calib_sweep::make_calib;
+use svy_core::estimation::taylor::SingletonRule;
+use svy_core::regression::glm::{
     GlmResult, design_codes, design_vcov_of_totals, fit_glm_by, fit_glm_reps, fit_glm_where,
     fit_one,
 };

@@ -328,7 +328,7 @@ fn compute_ratio_grouped(
     let by_str = df.column(by_col)?.str()?;
     // Group discovery and the design build are independent full passes.
     let (unique_groups, design) = rayon::join(
-        || crate::estimation::sorted_groups(by_str),
+        || svy_core::estimation::sorted_groups(by_str),
         || build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method),
     );
     let unique_groups = unique_groups?;

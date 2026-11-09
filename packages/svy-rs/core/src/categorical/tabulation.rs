@@ -198,7 +198,7 @@ fn beta_cf(x: f64, a: f64, b: f64) -> f64 {
 
 /// Proportions of every level with one joint Taylor covariance, as R does (no per-level polarization).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn estimate_proportions(
+pub fn estimate_proportions(
     y: &StringChunked,
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -291,7 +291,7 @@ pub(crate) fn estimate_proportions(
 }
 
 /// SE of a cell share, NaN when the share is: `f64::max` turns a NaN variance into 0.
-pub(crate) fn cell_se(estimate: f64, variance: f64) -> f64 {
+pub fn cell_se(estimate: f64, variance: f64) -> f64 {
     if estimate.is_nan() {
         f64::NAN
     } else {
@@ -306,10 +306,7 @@ pub(crate) fn in_domain(domain: Option<&BooleanChunked>, i: usize) -> bool {
 }
 
 /// Sorted distinct in-domain keys: an out-of-domain row's category never forms a cell.
-pub(crate) fn domain_levels(
-    y: &StringChunked,
-    domain: Option<&BooleanChunked>,
-) -> CResult<Vec<String>> {
+pub fn domain_levels(y: &StringChunked, domain: Option<&BooleanChunked>) -> CResult<Vec<String>> {
     let mut levels: Vec<String> = match domain {
         None => y
             .unique()?
@@ -333,7 +330,7 @@ pub(crate) fn domain_levels(
 
 /// Compute weighted totals and SEs for each level.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn estimate_totals(
+pub fn estimate_totals(
     y: &StringChunked,
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -408,7 +405,7 @@ pub(crate) fn estimate_totals(
 // ============================================================================
 
 /// Rao-Scott Pearson statistics: (chisq, df, p, adj_f, adj_ndf, adj_ddf, adj_p).
-pub(crate) fn rao_scott(
+pub fn rao_scott(
     proportions: &[f64],
     cov_survey: &[Vec<f64>],
     nr: usize,
@@ -551,7 +548,7 @@ pub(crate) fn rao_scott(
 }
 
 /// Count unique strata and PSUs for Rao-Scott df calculation.
-pub(crate) fn count_strata_psus(
+pub fn count_strata_psus(
     strata: Option<&Column>,
     psu: Option<&Column>,
     n: usize,

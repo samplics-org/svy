@@ -1,19 +1,19 @@
 //! PyO3 wrappers for Taylor linearisation; the heavy math lives in `taylor`.
 
 use crate::errors::to_py_err;
-use crate::estimation::error::{EResult, EstimationError};
 use numpy::PyReadonlyArray1;
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 use rayon::prelude::*;
+use svy_core::estimation::error::{EResult, EstimationError};
 
-use crate::estimation::association::{
+use crate::estimation::into_contiguous;
+use svy_core::estimation::association::{
     AssocKind, point_estimate_assoc, scores_assoc, srs_variance_assoc_of,
 };
-use crate::estimation::calib_sweep::{CalibSweep, make_calib};
-use crate::estimation::into_contiguous;
-use crate::estimation::taylor::{
+use svy_core::estimation::calib_sweep::{CalibSweep, make_calib};
+use svy_core::estimation::taylor::{
     SrsRef, SvyQuantileMethod, TaylorDesign, active_count, build_taylor_design, degrees_of_freedom,
     degrees_of_freedom_from_design, point_estimate_mean, point_estimate_mean_domain,
     point_estimate_ratio, point_estimate_ratio_domain, point_estimate_total,

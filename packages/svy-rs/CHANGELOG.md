@@ -12,7 +12,8 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 ### Changed
 
-- The kernels move to `svy-core` (`core/`), a plain-Rust crate with no pyo3 or numpy, in one Cargo workspace with `svy_rs`, which keeps only the Python bindings. Moved so far: the `Coded` error contract, the RNG, SRS/PPS selection, and the weighting kernels (adjustment, calibration, trimming, replicate weights). `PpsMethod` parses through `FromStr`. Python-facing names, signatures and errors are unchanged; `cargo test -p svy-core` needs no Python.
+- The kernels move to `svy-core` (`core/`), a plain-Rust crate with no pyo3 or numpy, in one Cargo workspace with `svy_rs`, which keeps only the Python bindings. Moved so far: the `Coded` error contract, the RNG, SRS/PPS selection, the weighting kernels (adjustment, calibration, trimming, replicate weights), and the estimation, categorical and regression kernels with the criterion benches. `PpsMethod` and `RankScoreMethod` parse through `FromStr`. Python-facing names, signatures and errors are unchanged; `cargo test -p svy-core` and `cargo bench -p svy-core` need no Python.
+- Release builds use thin LTO. Without it the GLM fit ran 23% slower once its kernels sat in another crate; fat LTO with one codegen unit fixed that but cost tabulation 15%.
 
 ## [0.20.0] — 2026-10-28
 

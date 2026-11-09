@@ -1,20 +1,21 @@
 //! PyO3 wrappers for replicate-weight variance; the matrix math lives in `replication`.
 
 use crate::errors::to_py_err;
-use crate::estimation::error::{EResult, EstimationError};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
+use svy_core::estimation::error::{EResult, EstimationError};
 
 use polars::prelude::*;
 use pyo3::prelude::*;
 use pyo3_polars::PyDataFrame;
 
-use crate::estimation::association::{
+use crate::estimation::into_contiguous;
+use crate::estimation::taylor_api::parse_srs_ref;
+use svy_core::estimation::association::{
     AssocKind, PairProducts, replicate_association, srs_variance_assoc_of,
 };
-use crate::estimation::into_contiguous;
-use crate::estimation::replication::{
+use svy_core::estimation::replication::{
     VarianceCenter, covariance_from_replicates, extract_rep_weights_matrix, index_domains,
     matrix_mean_by_domain, matrix_mean_by_domain_cols, matrix_mean_estimates,
     matrix_mean_estimates_cols, matrix_prop_by_domain, matrix_prop_by_domain_str,
@@ -24,11 +25,10 @@ use crate::estimation::replication::{
     matrix_total_by_domain_cols, matrix_total_estimates, matrix_total_estimates_cols,
     quantile_by_domain_cols, quantile_estimates_cols, variance_from_replicates,
 };
-use crate::estimation::taylor::{
+use svy_core::estimation::taylor::{
     SrsRef, SvyQuantileMethod, active_count, srs_variance_mean, srs_variance_mean_domain,
     srs_variance_ratio, srs_variance_ratio_domain, srs_variance_total, srs_variance_total_domain,
 };
-use crate::estimation::taylor_api::parse_srs_ref;
 
 /// Row-major flat k×k covariance for the FFI boundary.
 fn flatten_cov(cov: Vec<Vec<f64>>) -> Vec<f64> {
@@ -638,7 +638,9 @@ fn compute_replicate_assoc(
     let by_str = by_col
         .map(|c| df.column(c).and_then(|s| s.str()))
         .transpose()?;
-    let unique_groups = by_str.map(crate::estimation::sorted_groups).transpose()?;
+    let unique_groups = by_str
+        .map(svy_core::estimation::sorted_groups)
+        .transpose()?;
     let group_names: Vec<Option<&str>> = match unique_groups.as_ref() {
         Some(u) => u.iter().flatten().map(Some).collect(),
         None => vec![None],

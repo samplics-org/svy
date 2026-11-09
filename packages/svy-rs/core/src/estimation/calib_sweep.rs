@@ -13,7 +13,7 @@ pub(crate) const OUT_OF_SCOPE: u32 = u32::MAX;
 const RAKE_ITERATIONS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SweepKind {
+pub enum SweepKind {
     /// One cell coding: poststratification and standardization.
     Cells,
     /// One coding per margin, swept in turn.
@@ -23,7 +23,7 @@ pub(crate) enum SweepKind {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CalibSweep {
+pub struct CalibSweep {
     pub kind: SweepKind,
     /// One code vector per margin. `Cells` and `Greg` use at most one.
     pub cells: Vec<Vec<u32>>,
@@ -342,7 +342,7 @@ pub(crate) fn build_calib_sweep(df: &DataFrame, spec: &CalibSpec) -> EResult<Cal
 /// The sweep for a wrapper's `calib_*` arguments; `None` when no record was passed.
 /// `new_wgt` is `weight_col` except under a subpopulation filter: then it is the pre-zeroing copy.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn make_calib(
+pub fn make_calib(
     df: &DataFrame,
     weight_col: &str,
     kind: Option<String>,

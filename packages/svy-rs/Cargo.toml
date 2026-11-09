@@ -18,8 +18,7 @@ default-members = [".", "core"]
 [lib]
 name = "_internal"
 # cdylib: the Python extension module (what maturin builds into the wheel).
-# rlib:   lets `cargo test`/`cargo bench` and the criterion benches link the
-#         crate as an ordinary Rust library.
+# rlib:   lets `cargo test` link the crate as an ordinary Rust library.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -41,30 +40,17 @@ polars = { version = "0.55", default-features = false, features = [
     "dtype-u8",
     "dtype-u16",
 ] }
-faer = "0.24"
 numpy = "0.29"
 # Must stay within what numpy accepts (`>= 0.15, <=0.17`): a bump past that
 # range leaves two ArrayBase types in one graph and every ndarray-typed call
 # fails to typecheck. Verify a single ndarray entry in Cargo.lock after bumping.
 ndarray = { version = "0.17", features = ["rayon"] }
 rayon = "1.12"
-rustc-hash = "2.1"
-thiserror = "2.0"
-approx = "0.5.1"
 
 [features]
 extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
 
-[dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
-
-# Criterion micro-benchmarks for the estimation kernel. Run WITHOUT the
-# extension-module feature so the bench binary links as a normal executable:
-#   PYO3_PYTHON=../../.venv/bin/python cargo bench --no-default-features
-# (see `make bench-svy-rs`). Measures the individual functions Phase B/C touch
-# — string vs integer design indexing, fused point estimates, variance passes —
-# in isolation, free of Python/PyO3 marshalling noise.
-[[bench]]
-name = "kernel_bench"
-harness = false
+# The kernels sit in svy-core: without LTO, code instantiated across the crate boundary loses inlining.
+[profile.release]
+lto = "thin"

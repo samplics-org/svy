@@ -484,7 +484,7 @@ fn compute_quantile_grouped(
         calib,
     )?;
     let by_str = df.column(by_col)?.str()?;
-    let unique_groups = crate::estimation::sorted_groups(by_str)?;
+    let unique_groups = svy_core::estimation::sorted_groups(by_str)?;
 
     let k = probs.len();
     let mut by_vals: Vec<&str> = Vec::new();

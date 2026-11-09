@@ -56,7 +56,7 @@ pub(crate) fn check_lengths(
 }
 
 /// Dense 0-based codes for `strata` and nested PSUs; nulls (`u32::MAX`) become one extra level.
-pub(crate) fn design_codes(
+pub fn design_codes(
     strata: Option<&Series>,
     psu: Option<&Series>,
     n: usize,
@@ -431,7 +431,7 @@ pub(crate) fn singleton_meat(
 
 /// R's `svyrecvar`: row-major `p * p` covariance of the totals of column-major, already-weighted `n * p` columns.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn design_vcov_of_totals(
+pub fn design_vcov_of_totals(
     cols: &[f64],
     n: usize,
     p: usize,

@@ -1,14 +1,17 @@
 //! Criterion benchmarks of the estimation kernels on native polars arrays, with no PyO3 boundary.
-//! - `make bench-svy-rs`, or `PYO3_PYTHON=../../.venv/bin/python cargo bench --no-default-features`.
+//! - `make bench-svy-rs`, or `cargo bench -p svy-core`.
 //! - Inputs: ~20 strata of ~50 PSUs, single-chunk and null-free, as after `prepare_data`.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use polars::prelude::*;
 use std::hint::black_box;
 
-use _internal::bench::{
-    AssocKind, PairProducts, SrsRef, bivar_moments, index_categorical, index_categorical_pair,
-    multi_moments, point_estimate_corr, point_estimate_mean, replicate_association, scores_mean,
+use svy_core::estimation::association::{
+    AssocKind, PairProducts, bivar_moments, multi_moments, point_estimate_corr,
+    replicate_association,
+};
+use svy_core::estimation::taylor::{
+    SrsRef, index_categorical, index_categorical_pair, point_estimate_mean, scores_mean,
     srs_variance_mean, taylor_variance,
 };
 

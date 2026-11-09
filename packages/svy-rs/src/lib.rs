@@ -7,22 +7,7 @@ mod errors;
 mod estimation;
 mod regression;
 mod sampling;
-#[cfg(test)]
-mod test_fixtures;
 mod weighting;
-
-/// The kernels the criterion benches call; they link this crate as an rlib.
-#[doc(hidden)]
-pub mod bench {
-    pub use crate::estimation::association::{
-        AssocKind, PairProducts, bivar_moments, multi_moments, point_estimate_corr,
-        replicate_association,
-    };
-    pub use crate::estimation::taylor::{
-        SrsRef, index_categorical, index_categorical_pair, point_estimate_mean, scores_mean,
-        srs_variance_mean, taylor_variance,
-    };
-}
 
 // ============================================================================
 // Module Registration
