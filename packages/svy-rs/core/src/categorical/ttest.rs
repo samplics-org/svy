@@ -19,37 +19,37 @@ use crate::regression::wols::{fit_wols, influence_se};
 
 /// Result for a one-sample t-test.
 #[allow(dead_code)]
-pub struct TTestOneResult {
-    pub estimate: f64,
-    pub se: f64,
+pub(crate) struct TTestOneResult {
+    pub(crate) estimate: f64,
+    pub(crate) se: f64,
     /// estimate - null_value
-    pub diff: f64,
+    pub(crate) diff: f64,
     /// Equals `se` for one sample.
-    pub se_diff: f64,
-    pub t_stat: f64,
+    pub(crate) se_diff: f64,
+    pub(crate) t_stat: f64,
     /// degf(design) - 1
-    pub df: f64,
-    pub p_value: f64,
+    pub(crate) df: f64,
+    pub(crate) p_value: f64,
     /// Records in the domain with a nonzero weight and a non-missing y
-    pub n_obs: usize,
+    pub(crate) n_obs: usize,
 }
 
 /// Result for a two-sample t-test.
 #[allow(dead_code)]
-pub struct TTestTwoResult {
+pub(crate) struct TTestTwoResult {
     /// group1 - group0
-    pub diff: f64,
-    pub se_diff: f64,
-    pub t_stat: f64,
+    pub(crate) diff: f64,
+    pub(crate) se_diff: f64,
+    pub(crate) t_stat: f64,
     /// degf(design) - 1
-    pub df: f64,
-    pub p_value: f64,
-    pub levels: Vec<String>,
-    pub group_means: Vec<f64>,
-    pub group_ses: Vec<f64>,
-    pub group_ns: Vec<usize>,
+    pub(crate) df: f64,
+    pub(crate) p_value: f64,
+    pub(crate) levels: Vec<String>,
+    pub(crate) group_means: Vec<f64>,
+    pub(crate) group_ses: Vec<f64>,
+    pub(crate) group_ns: Vec<usize>,
     /// Records in either group
-    pub n_obs: usize,
+    pub(crate) n_obs: usize,
 }
 
 /// Records with a nonzero weight and a non-missing y, within the domain if given.
@@ -74,7 +74,7 @@ fn count_active(y: &Float64Chunked, w: &Float64Chunked, domain: Option<&BooleanC
 
 /// One-sample t-test: R's svyttest(y ~ 1), i.e. svymean with df = degf(design) - 1.
 #[allow(clippy::too_many_arguments)]
-pub fn ttest_one_sample(
+pub(crate) fn ttest_one_sample(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     strata: Option<&Column>,
@@ -130,7 +130,7 @@ pub fn ttest_one_sample(
 
 /// One-sample t-test within a domain.
 #[allow(clippy::too_many_arguments)]
-pub fn ttest_one_sample_domain(
+pub(crate) fn ttest_one_sample_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
@@ -192,7 +192,7 @@ pub fn ttest_one_sample_domain(
 
 /// Two-sample t-test: R's svyttest(y ~ group), whose gaussian svyglm sandwich equals weighted OLS + Taylor.
 #[allow(clippy::too_many_arguments)]
-pub fn ttest_two_sample(
+pub(crate) fn ttest_two_sample(
     y: &[f64],
     g: &[u32], // group indices: 0 or 1
     w: &[f64],
@@ -339,7 +339,7 @@ fn compute_per_group_ses(
 // ============================================================================
 
 /// One-sample t-test on a replicate design (R's svyttest on svyrep.design); df = replicate df - 1.
-pub fn ttest_one_sample_rep(
+pub(crate) fn ttest_one_sample_rep(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,
@@ -377,7 +377,7 @@ pub fn ttest_one_sample_rep(
 }
 
 /// Two-sample t-test on a replicate design: R's svrepglm slope per replicate; df = replicate df - 1.
-pub fn ttest_two_sample_rep(
+pub(crate) fn ttest_two_sample_rep(
     y: &[f64],
     g: &[u32],
     w: &[f64],

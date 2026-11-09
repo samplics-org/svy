@@ -21,7 +21,7 @@ use crate::estimation::error::EResult;
 use polars::prelude::{ChunkSort, ChunkUnique, StringChunked};
 
 /// Unique by-group levels, sorted: `unique()` is hash-ordered and varies by process.
-pub fn sorted_groups(by: &StringChunked) -> EResult<StringChunked> {
+pub(crate) fn sorted_groups(by: &StringChunked) -> EResult<StringChunked> {
     Ok(by.unique()?.sort(false))
 }
 

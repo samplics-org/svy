@@ -236,12 +236,12 @@ use polars::prelude::*;
 /// Column names naming a weight-adjustment record, as passed from Python.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CalibSpec {
-    pub kind: String,
-    pub cells_cols: Vec<String>,
-    pub aux_cols: Vec<String>,
-    pub prev_wgt_col: String,
-    pub new_wgt_col: String,
-    pub pins_total: bool,
+    pub(crate) kind: String,
+    pub(crate) cells_cols: Vec<String>,
+    pub(crate) aux_cols: Vec<String>,
+    pub(crate) prev_wgt_col: String,
+    pub(crate) new_wgt_col: String,
+    pub(crate) pins_total: bool,
 }
 
 fn codes_from(df: &DataFrame, name: &str) -> EResult<(Vec<u32>, usize)> {

@@ -12,9 +12,9 @@ use crate::estimation::replication::{VarianceCenter, covariance_from_replicates}
 
 pub struct RepSpec {
     /// One weight vector per replicate.
-    pub weights: Vec<Vec<f64>>,
-    pub coefs: Vec<f64>,
-    pub center: VarianceCenter,
+    pub(crate) weights: Vec<Vec<f64>>,
+    pub(crate) coefs: Vec<f64>,
+    pub(crate) center: VarianceCenter,
     /// The recorded design df, else n_reps - 1; it does not shrink on a domain.
     pub df: f64,
 }
@@ -102,15 +102,15 @@ impl RepSpec {
 }
 
 /// Cells of a tabulation with a replication covariance.
-pub struct RepCells {
-    pub proportions: Vec<f64>,
-    pub prop_cov: Vec<Vec<f64>>,
-    pub totals: Vec<f64>,
-    pub total_cov: Vec<Vec<f64>>,
+pub(crate) struct RepCells {
+    pub(crate) proportions: Vec<f64>,
+    pub(crate) prop_cov: Vec<Vec<f64>>,
+    pub(crate) totals: Vec<f64>,
+    pub(crate) total_cov: Vec<Vec<f64>>,
 }
 
 /// Cell proportions and totals per replicate; a row counts when in the domain and its key is in `levels`.
-pub fn replicate_cells(
+pub(crate) fn replicate_cells(
     y: &StringChunked,
     weights: &Float64Chunked,
     domain: Option<&BooleanChunked>,

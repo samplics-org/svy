@@ -26,7 +26,7 @@ pub enum CategoricalError {
     Polars(#[from] PolarsError),
 }
 
-pub type CResult<T> = Result<T, CategoricalError>;
+pub(crate) type CResult<T> = Result<T, CategoricalError>;
 
 impl Coded for CategoricalError {
     fn code(&self) -> &'static str {
