@@ -15,6 +15,7 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ### Changed
 
+- **Tabulation and `by=` estimates do less per call.** `tabulate` keeps the design keys the sample already holds instead of rebuilding them on every call (about 30% faster), and estimation builds its `by` key as text directly instead of as a categorical it then cast back (`mean(by=)` about 25% faster). Results are unchanged.
 - **Breaking: every result's `to_polars()` gives the full record of each row.** Columns run identity, levels, numbers, settings, so a frame reads without its result:
   - identity first: `y_var` (and `x_var` for a ratio or a pair, `group_var` for a test, `term` for a GLM), on every frame; correlation pairs' `y`/`x` and an estimate list's leading `y`/`x` become `y_var`/`x_var`;
   - numbers named alike: `est, se, lci, uci, cv`, then the test as `t, df, p_value` or `f, df_num, df_den, p_value`, then `n`. GLM `estimate, std_err, conf_low, conf_high, statistic` become `est, se, lci, uci, t` (`odds_ratio` and the other ratio names stay with `exponentiate=True`); margins' `margin`, a prediction's `yhat` and a t-test's or rank test's `diff` become `est`; the k-sample rank test's `chisq, f_stat, ndf, ddf` become `f, df_num, df_den`; `df` is Float64 everywhere;
@@ -25,7 +26,6 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 - **Breaking: untidy t-test and rank-test frames give `by` as a list and `by_level`/`by_label` as structs keyed by variable, with one `by` variable too**, as untidy estimate frames do. An empty estimate or table keeps its number and settings columns instead of returning a frame with none.
 - **`import svy` no longer loads `scipy.stats` or `scipy.optimize`**, which the size and power code imported at module level; they load on the first call that needs them. `import svy` takes about half the time it did.
 - **Tables, t-tests and rank tests export their levels as estimates do.** `Table.to_polars()` gives each level in its column's type (Float64 `1.0`, Boolean `true`, no longer the text `"1"`, `"true"`) with a `<var>_label` column beside each labelled variable; t-tests and rank tests by domain add one for each labelled `by` variable (`by_label` with `tidy=False`). `to_polars(use_labels=)` switches them off: on `Table` it defaults like `Estimate`, on t-tests and rank tests it defaults to on and also drops the group's label column. A name taken by a variable raises `LABEL_COLUMN_CLASH`, as for estimates.
-- **Tabulation and `by=` estimates do less per call.** `tabulate` keeps the design keys the sample already holds instead of rebuilding them on every call (about 30% faster), and estimation builds its `by` key as text directly instead of as a categorical it then cast back (`mean(by=)` about 25% faster). Results are unchanged.
 
 ### Fixed
 
