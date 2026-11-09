@@ -2,5 +2,6 @@
 #![warn(unreachable_pub)]
 
 pub mod errors;
-pub mod rng;
+pub(crate) mod rng;
 pub mod sampling;
+pub mod weighting;

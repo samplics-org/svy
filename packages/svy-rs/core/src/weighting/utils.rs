@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::errors::{Coded, KERNEL_INTERNAL};
 
 #[derive(Error, Debug)]
-pub(crate) enum WeightingError {
+pub enum WeightingError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
@@ -32,7 +32,7 @@ pub(crate) enum WeightingError {
     SvdNotConverged,
 }
 
-pub(crate) type Result<T> = std::result::Result<T, WeightingError>;
+pub type Result<T> = std::result::Result<T, WeightingError>;
 
 impl Coded for WeightingError {
     fn code(&self) -> &'static str {

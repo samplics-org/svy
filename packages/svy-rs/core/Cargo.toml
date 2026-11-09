@@ -8,5 +8,11 @@ homepage = "https://svylab.com/docs/svy"
 publish = false
 
 [dependencies]
+faer = "0.24"
+# Must be the ndarray the bindings' numpy accepts; see ../Cargo.toml.
+ndarray = { version = "0.17", features = ["rayon"] }
 rayon = "1.12"
 thiserror = "2.0"
+
+[dev-dependencies]
+approx = "0.5.1"

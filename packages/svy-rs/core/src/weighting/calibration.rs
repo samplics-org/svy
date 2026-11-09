@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 /// Solves (X' diag(w/s) X) λ = t - X'w per column and returns w * g, with g = 1 + Xλ / s.
 /// With `additive`, returns g itself.
-pub(crate) fn calibrate_linear(
+pub fn calibrate_linear(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     totals: ArrayView1<f64>,
@@ -218,20 +218,20 @@ fn solve_pseudoinverse(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> 
 
 /// Where a bounded solve stopped: the largest `|misfit| / (1 + |t|)` and the Newton steps taken.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct BoundedFit {
-    pub(crate) achieved: f64,
-    pub(crate) steps: usize,
+pub struct BoundedFit {
+    pub achieved: f64,
+    pub steps: usize,
 }
 
 /// The distance g is solved under: `g = clamp(1 + u)` (linear) or `clamp(exp(u))` (raking).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Distance {
+pub enum Distance {
     Linear,
     Raking,
 }
 
 impl Distance {
-    pub(crate) fn parse(name: &str) -> Result<Self> {
+    pub fn parse(name: &str) -> Result<Self> {
         match name {
             "linear" => Ok(Self::Linear),
             "raking" => Ok(Self::Raking),
@@ -289,18 +289,18 @@ fn raking_dual(u: f64, lower: f64, upper: f64) -> f64 {
 
 /// Bounds `[lower, upper]` on g = new / old weight, with the Newton loop's stopping rule.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BoundedSolve {
-    pub(crate) lower: f64,
-    pub(crate) upper: f64,
-    pub(crate) tol: f64,
-    pub(crate) max_iter: usize,
-    pub(crate) distance: Distance,
+pub struct BoundedSolve {
+    pub lower: f64,
+    pub upper: f64,
+    pub tol: f64,
+    pub max_iter: usize,
+    pub distance: Distance,
 }
 
 /// Calibration with g held in `[lower, upper]`, per column: R survey's `grake`. Returns the
 /// weights and, per column, where the solve stopped; a column that did not converge holds the
 /// last iterate.
-pub(crate) fn calibrate_bounded(
+pub fn calibrate_bounded(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     totals: ArrayView1<f64>,
@@ -504,7 +504,7 @@ fn grake(
 type BoundedByDomain = (Array2<f64>, Vec<i64>, Vec<Vec<BoundedFit>>);
 
 /// `calibrate_bounded` separately within each domain, against that domain's totals.
-pub(crate) fn calibrate_bounded_by_domain(
+pub fn calibrate_bounded_by_domain(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     domain: ArrayView1<i64>,
@@ -584,7 +584,7 @@ pub(crate) fn calibrate_bounded_by_domain(
 }
 
 /// `calibrate_linear` separately within each domain, against that domain's control totals.
-pub(crate) fn calibrate_by_domain(
+pub fn calibrate_by_domain(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     domain: ArrayView1<i64>,
@@ -732,7 +732,7 @@ fn find_domain_boundaries(domain_sorted: &Array1<i64>) -> HashMap<i64, (usize, u
 }
 
 /// `calibrate_linear` with `additive = false`.
-pub(crate) fn calibrate_parallel(
+pub fn calibrate_parallel(
     wgt: ArrayView2<f64>,
     x_matrix: ArrayView2<f64>,
     totals: ArrayView1<f64>,
