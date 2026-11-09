@@ -4,7 +4,7 @@ use crate::estimation::error::EResult;
 use polars::prelude::*;
 use std::collections::HashMap;
 
-use super::taylor::{SvyQuantileMethod, weighted_quantile};
+use super::taylor::{SvyQuantileMethod, quantile_in_bracket, weighted_quantile};
 
 /// Per domain: full-sample estimates `[K][P]`, replicate estimates `[K][P][R]`, row counts `[K]`.
 pub(crate) type DomainReps = (Vec<Vec<f64>>, Vec<Vec<Vec<f64>>>, Vec<u32>);
@@ -1293,12 +1293,167 @@ fn weighted_median_vec(y: &[f64], weights: &[f64], n: usize, q_method: SvyQuanti
 
 /// Finite-`y` indices of `rows`, stably sorted by `y`: the order `weighted_quantiles_vec` uses.
 fn sorted_finite(y: &[f64], rows: impl Iterator<Item = usize>) -> Vec<usize> {
-    let mut order: Vec<usize> = rows.filter(|&i| y[i].is_finite()).collect();
-    order.sort_by(|&a, &b| y[a].partial_cmp(&y[b]).unwrap_or(std::cmp::Ordering::Equal));
-    order
+    use rayon::prelude::*;
+    let mut keyed: Vec<(f64, usize)> = rows
+        .filter(|&i| y[i].is_finite())
+        .map(|i| (y[i], i))
+        .collect();
+    // Finite values are totally ordered (with -0.0 == 0.0, as before), so this stable parallel
+    // sort keeps tied rows in row order; values beside their rows spare the indirect lookups.
+    keyed.par_sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    keyed.into_par_iter().map(|(_, i)| i).collect()
 }
 
-/// [`weighted_quantiles_vec`] over `order` (from [`sorted_finite`]), without re-sorting.
+/// A sort order from [`sorted_finite`], shared by every replicate: `y` in that order, and each
+/// row's position in it with the rows ascending, so a replicate reads its weights sequentially.
+struct SortedY {
+    y_sorted: Vec<f64>,
+    rows: Vec<usize>,
+    pos: Vec<usize>,
+}
+
+impl SortedY {
+    fn new(y: &[f64], order: Vec<usize>) -> Self {
+        use rayon::slice::ParallelSliceMut;
+        let y_sorted = order.iter().map(|&i| y[i]).collect();
+        let mut by_row: Vec<(usize, usize)> =
+            order.into_iter().enumerate().map(|(j, i)| (i, j)).collect();
+        by_row.par_sort_unstable_by_key(|&(i, _)| i);
+        let (rows, pos) = by_row.into_iter().unzip();
+        Self {
+            y_sorted,
+            rows,
+            pos,
+        }
+    }
+}
+
+/// Scratch reused across the replicates a thread handles, instead of fresh n-vectors each.
+#[derive(Default)]
+struct QuantileBufs {
+    // One replicate's weights in sorted order; every slot is rewritten, so it is never cleared.
+    perm: Vec<f64>,
+    y: Vec<f64>,
+    w: Vec<f64>,
+    cdf: Vec<f64>,
+}
+
+/// [`weighted_quantiles_vec`] over a [`SortedY`], without re-sorting. Two passes over the
+/// positive weights in sorted order, the second stopping once every `p` is bracketed, give the
+/// CDF points [`weighted_quantile`] would read, from the same sums in the same order.
+fn quantiles_sorted(
+    sorted: &SortedY,
+    weights: &[f64],
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+    bufs: &mut QuantileBufs,
+) -> Vec<f64> {
+    let perm = &mut bufs.perm;
+    // Sequential reads, scattered writes: cheaper than reading the weights in sorted order.
+    perm.resize(sorted.y_sorted.len(), 0.0);
+    for (&i, &j) in sorted.rows.iter().zip(&sorted.pos) {
+        perm[j] = weights[i];
+    }
+    let positive = || {
+        perm.iter()
+            .zip(&sorted.y_sorted)
+            .filter(|(wi, _)| **wi > 0.0)
+            .map(|(&wi, &yv)| (wi, yv))
+    };
+
+    let mut n_pos = 0usize;
+    let mut total = 0.0f64;
+    let (mut first, mut last_y) = ((f64::NAN, f64::NAN), f64::NAN);
+    for (wi, yv) in positive() {
+        if n_pos == 0 {
+            first = (yv, wi);
+        }
+        n_pos += 1;
+        total += wi;
+        last_y = yv;
+    }
+    if n_pos == 0 || total <= 0.0 {
+        return vec![f64::NAN; probs.len()];
+    }
+    if !total.is_finite() {
+        // An infinite weight makes the CDF NaN, where only the stored arrays reproduce it.
+        return quantiles_stored(sorted, probs, q_method, bufs);
+    }
+    if n_pos == 1 {
+        return vec![first.0; probs.len()];
+    }
+
+    let first = (first.0, first.1 / total);
+    // The running sum ends at `total` itself (same terms, same order), and total / total is 1.
+    let last = (last_y, 1.0);
+    let mut out = vec![f64::NAN; probs.len()];
+    let mut pending = Vec::new();
+    for (k, &p) in probs.iter().enumerate() {
+        if !(0.0..=1.0).contains(&p) {
+            continue;
+        }
+        if p <= first.1 {
+            out[k] = quantile_in_bracket(q_method, p, first, first, false);
+        } else if p >= last.1 {
+            out[k] = quantile_in_bracket(q_method, p, last, last, false);
+        } else {
+            pending.push(k);
+        }
+    }
+    let mut cum = 0.0f64;
+    let mut prev = first;
+    for (wi, yv) in positive() {
+        if pending.is_empty() {
+            break;
+        }
+        cum += wi;
+        let here = (yv, cum / total);
+        // The first CDF point not below p, as `partition_point` finds it on a monotone CDF.
+        pending.retain(|&k| {
+            let p = probs[k];
+            if here.1 < p {
+                return true;
+            }
+            out[k] = quantile_in_bracket(q_method, p, prev, here, true);
+            false
+        });
+        prev = here;
+    }
+    out
+}
+
+/// The CDF stored in full, then [`weighted_quantile`] at each `p`; `bufs.perm` already holds the
+/// replicate's weights in sorted order.
+fn quantiles_stored(
+    sorted: &SortedY,
+    probs: &[f64],
+    q_method: SvyQuantileMethod,
+    bufs: &mut QuantileBufs,
+) -> Vec<f64> {
+    let QuantileBufs { perm, y, w, cdf } = bufs;
+    y.clear();
+    w.clear();
+    cdf.clear();
+    for (&wi, &yv) in perm.iter().zip(&sorted.y_sorted) {
+        if wi > 0.0 {
+            y.push(yv);
+            w.push(wi);
+        }
+    }
+    let total_w: f64 = w.iter().sum();
+    let mut cumsum = 0.0;
+    for wi in w.iter() {
+        cumsum += wi;
+        cdf.push(cumsum / total_w);
+    }
+    probs
+        .iter()
+        .map(|&p| weighted_quantile(y, cdf, p, q_method))
+        .collect()
+}
+
+/// [`quantiles_sorted`] from a bare order, as the tests compare it with [`weighted_quantiles_vec`].
+#[cfg(test)]
 fn quantiles_in_order(
     y: &[f64],
     weights: &[f64],
@@ -1306,31 +1461,14 @@ fn quantiles_in_order(
     probs: &[f64],
     q_method: SvyQuantileMethod,
 ) -> Vec<f64> {
-    let mut y_sorted = Vec::with_capacity(order.len());
-    let mut w_sorted = Vec::with_capacity(order.len());
-    for &i in order {
-        if weights[i] > 0.0 {
-            y_sorted.push(y[i]);
-            w_sorted.push(weights[i]);
-        }
-    }
-    if y_sorted.is_empty() {
-        return vec![f64::NAN; probs.len()];
-    }
-    let total_w: f64 = w_sorted.iter().sum();
-    if total_w <= 0.0 {
-        return vec![f64::NAN; probs.len()];
-    }
-    let mut cdf = Vec::with_capacity(w_sorted.len());
-    let mut cumsum = 0.0;
-    for w in &w_sorted {
-        cumsum += w;
-        cdf.push(cumsum / total_w);
-    }
-    probs
-        .iter()
-        .map(|&p| weighted_quantile(&y_sorted, &cdf, p, q_method))
-        .collect()
+    let sorted = SortedY::new(y, order.to_vec());
+    quantiles_sorted(
+        &sorted,
+        weights,
+        probs,
+        q_method,
+        &mut QuantileBufs::default(),
+    )
 }
 
 /// Full-sample and per-replicate quantiles: `(full[P], replicates[P][R])`, in `probs` order.
@@ -1342,12 +1480,17 @@ pub(crate) fn quantile_estimates_cols(
     q_method: SvyQuantileMethod,
 ) -> (Vec<f64>, Vec<Vec<f64>>) {
     use rayon::prelude::*;
-    let order = sorted_finite(y, 0..y.len());
-    let theta_full = quantiles_in_order(y, full_weights, &order, probs, q_method);
-    let per_rep: Vec<Vec<f64>> = rep_cols
+    let sorted = SortedY::new(y, sorted_finite(y, 0..y.len()));
+    // The full-sample weights run in the same parallel batch as the replicates.
+    let mut per_rep: Vec<Vec<f64>> = std::iter::once(full_weights)
+        .chain(rep_cols.iter().copied())
+        .collect::<Vec<_>>()
         .par_iter()
-        .map(|col| quantiles_in_order(y, col, &order, probs, q_method))
+        .map_init(QuantileBufs::default, |bufs, col| {
+            quantiles_sorted(&sorted, col, probs, q_method, bufs)
+        })
         .collect();
+    let theta_full = per_rep.remove(0);
     let theta_reps = (0..probs.len())
         .map(|j| per_rep.iter().map(|r| r[j]).collect())
         .collect();
@@ -1374,20 +1517,21 @@ pub(crate) fn quantile_by_domain_cols(
             counts[d] += u32::from(full_weights[i] != 0.0);
         }
     }
-    let orders: Vec<Vec<usize>> = rows
+    let orders: Vec<SortedY> = rows
         .into_iter()
-        .map(|r| sorted_finite(y, r.into_iter()))
+        .map(|r| SortedY::new(y, sorted_finite(y, r.into_iter())))
         .collect();
+    let mut bufs = QuantileBufs::default();
     let theta_full = orders
         .iter()
-        .map(|o| quantiles_in_order(y, full_weights, o, probs, q_method))
+        .map(|o| quantiles_sorted(o, full_weights, probs, q_method, &mut bufs))
         .collect();
     let per_rep: Vec<Vec<Vec<f64>>> = rep_cols
         .par_iter()
-        .map(|col| {
+        .map_init(QuantileBufs::default, |bufs, col| {
             orders
                 .iter()
-                .map(|o| quantiles_in_order(y, col, o, probs, q_method))
+                .map(|o| quantiles_sorted(o, col, probs, q_method, bufs))
                 .collect()
         })
         .collect();
@@ -1557,6 +1701,33 @@ mod tests {
                 let got = quantiles_in_order(&y, &w, &order, &probs, q);
                 let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
                 assert_eq!(bits(&got), bits(&want), "{q:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_presorted_quantiles_match_at_degenerate_weights() {
+        let y = [3.0, 1.0, 2.0, 2.0, 5.0];
+        let order = sorted_finite(&y, 0..y.len());
+        let probs = [-0.1, 0.0, 0.3, 0.5, 1.0, 1.2];
+        let weight_sets: [&[f64]; 4] = [
+            &[1.0, f64::INFINITY, 2.0, 1.0, 1.0],
+            &[0.0, 0.0, 4.0, 0.0, 0.0],
+            &[0.0, -1.0, f64::NAN, 0.0, 0.0],
+            &[1e-300, 2.0, 1e-300, 3.0, 1.0],
+        ];
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        for w in weight_sets {
+            for q in [
+                SvyQuantileMethod::Linear,
+                SvyQuantileMethod::Lower,
+                SvyQuantileMethod::Higher,
+                SvyQuantileMethod::Nearest,
+                SvyQuantileMethod::Middle,
+            ] {
+                let want = weighted_quantiles_vec(&y, w, y.len(), &probs, q);
+                let got = quantiles_in_order(&y, w, &order, &probs, q);
+                assert_eq!(bits(&got), bits(&want), "{w:?} {q:?}");
             }
         }
     }
