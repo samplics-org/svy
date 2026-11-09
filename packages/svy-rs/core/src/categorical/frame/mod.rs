@@ -14,7 +14,8 @@ use crate::categorical::ranktest::{
 };
 use crate::categorical::replicate::{RepSpec, replicate_cells};
 use crate::categorical::tabulation::{
-    cell_se, count_strata_psus, domain_levels, estimate_proportions, estimate_totals, rao_scott,
+    LevelCodes, TabDesign, cell_se, count_strata_psus, domain_levels, estimate_proportions,
+    estimate_totals, rao_scott,
 };
 use crate::categorical::ttest::{
     ttest_one_sample, ttest_one_sample_domain, ttest_one_sample_rep, ttest_two_sample,
