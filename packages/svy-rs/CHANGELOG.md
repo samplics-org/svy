@@ -14,6 +14,7 @@ All notable changes to **svy_rs**, the internal Rust extension powering `svy`'s 
 
 - The kernels move to `svy-core` (`core/`), a plain-Rust crate with no pyo3 or numpy, in one Cargo workspace with `svy_rs`, which keeps only the Python bindings: the `#[pyfunction]`s, frame and numpy conversion, and the Python exceptions. Core holds the `Coded` error contract, the RNG, SRS/PPS selection, the weighting, estimation, categorical and regression kernels, the criterion benches, and the frame-level entry points the bindings call (`estimation::taylor_frame`, `estimation::replication_frame`, `categorical::frame`). Core items are `pub` only where the bindings or benches use them. `PpsMethod` and `RankScoreMethod` parse through `FromStr`. Python-facing names, signatures and errors are unchanged; `cargo test -p svy-core` and `cargo bench -p svy-core` need no Python.
 - `tabulate_rs` builds the Taylor design once per table instead of once per cell, again for the totals and again for the covariance, and reads each row's cell once: about twice as fast, identical results.
+- `taylor_prop`, `taylor_factor_total` and `taylor_prop_multi` read each row's level once and build every level's indicator from those codes, instead of hashing the strings for the levels and comparing every string again per level: about 40% faster, identical results.
 - Release builds use thin LTO. Without it the GLM fit ran 23% slower once its kernels sat in another crate; fat LTO with one codegen unit fixed that but cost tabulation 15%.
 
 ## [0.20.0] — 2026-10-28
