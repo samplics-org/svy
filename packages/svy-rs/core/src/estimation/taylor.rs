@@ -158,23 +158,43 @@ pub fn point_estimate_mean(y: &Float64Chunked, weights: &Float64Chunked) -> ERes
     Ok(sum_wy / sum_w)
 }
 
+/// `(sum wy, sum w)` over the in-domain rows, in row order: the domain kernels' fast path.
+#[inline]
+fn domain_sums(ys: &[f64], ws: &[f64], in_domain: &[bool]) -> (f64, f64) {
+    let mut sum_wy = 0.0f64;
+    let mut sum_w = 0.0f64;
+    for i in 0..ys.len() {
+        if in_domain[i] {
+            sum_wy += ys[i] * ws[i];
+            sum_w += ws[i];
+        }
+    }
+    (sum_wy, sum_w)
+}
+
+/// [`point_estimate_mean_domain`] over slices and a domain's [`mask_flags`], built once per domain.
+pub(crate) fn point_estimate_mean_flags(
+    ys: &[f64],
+    ws: &[f64],
+    in_domain: &[bool],
+) -> EResult<f64> {
+    let (sum_wy, sum_w) = domain_sums(ys, ws, in_domain);
+    if sum_w == 0.0 {
+        return Err(EstimationError::ZeroWeight { in_domain: true });
+    }
+    Ok(sum_wy / sum_w)
+}
+
 pub(crate) fn point_estimate_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
     domain_mask: &BooleanChunked,
 ) -> EResult<f64> {
     // Fast path: slices plus one pass over the mask; same rows and order, so bit-identical.
-    let (sum_wy, sum_w) = if let Some((ys, ws)) = cont_pair(y, weights) {
-        let mut sum_wy = 0.0f64;
-        let mut sum_w = 0.0f64;
-        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
-            if m {
-                sum_wy += ys[i] * ws[i];
-                sum_w += ws[i];
-            }
-        }
-        (sum_wy, sum_w)
-    } else {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        return point_estimate_mean_flags(ys, ws, &mask_flags(domain_mask));
+    }
+    let (sum_wy, sum_w) = {
         let sum_wy: f64 = y
             .iter()
             .zip(weights.iter())
@@ -489,6 +509,24 @@ pub(crate) fn scores_mean_arr(y: &Float64Chunked, weights: &Float64Chunked) -> E
         .collect())
 }
 
+/// [`scores_mean_domain`] over slices and a domain's flags, as the variance's array; all 0 without weight.
+pub(crate) fn scores_mean_flags(ys: &[f64], ws: &[f64], in_domain: &[bool]) -> Vec<f64> {
+    let (sum_wy, sum_w) = domain_sums(ys, ws, in_domain);
+    if sum_w == 0.0 {
+        return vec![0.0; ys.len()];
+    }
+    let est = sum_wy / sum_w;
+    (0..ys.len())
+        .map(|i| {
+            if in_domain[i] {
+                (ws[i] / sum_w) * (ys[i] - est)
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn scores_mean_domain(
     y: &Float64Chunked,
     weights: &Float64Chunked,
@@ -496,30 +534,8 @@ pub(crate) fn scores_mean_domain(
 ) -> EResult<Float64Chunked> {
     // Fast path: an in-domain flag vector, then two branch-free slice passes; bit-identical.
     if let Some((ys, ws)) = cont_pair(y, weights) {
-        let n = ys.len();
-        let in_domain = mask_flags(domain_mask);
-        let mut sum_wy = 0.0f64;
-        let mut sum_w = 0.0f64;
-        for i in 0..n {
-            if in_domain[i] {
-                sum_wy += ys[i] * ws[i];
-                sum_w += ws[i];
-            }
-        }
-        if sum_w == 0.0 {
-            return Ok(Float64Chunked::from_slice("scores".into(), &vec![0.0; n]));
-        }
-        let est = sum_wy / sum_w;
-        let scores: Vec<f64> = (0..n)
-            .map(|i| {
-                if in_domain[i] {
-                    (ws[i] / sum_w) * (ys[i] - est)
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        return Ok(Float64Chunked::from_slice("scores".into(), &scores));
+        let scores = scores_mean_flags(ys, ws, &mask_flags(domain_mask));
+        return Ok(Float64Chunked::from_vec("scores".into(), scores));
     }
 
     let n = y.len();
@@ -2396,41 +2412,67 @@ pub(crate) fn srs_variance_mean_domain(
     domain_mask: &BooleanChunked,
     srs: SrsRef,
 ) -> EResult<f64> {
-    let (yv, wv) = if let Some((ys, ws)) = cont_pair(y, weights) {
-        let mut yv = Vec::new();
-        let mut wv = Vec::new();
-        for (i, m) in mask_flags(domain_mask).into_iter().enumerate() {
-            // w > 0 as in srs_variance_mean: counting zero-weight rows would inflate n and deff.
-            if m && ws[i] > 0.0 {
-                yv.push(ys[i]);
-                wv.push(ws[i]);
-            }
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        return srs_variance_mean_flags(ys, ws, &mask_flags(domain_mask), srs);
+    }
+    let mut yv = Vec::new();
+    let mut wv = Vec::new();
+    for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
+        if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi)
+            && w_val > 0.0
+        {
+            yv.push(y_val);
+            wv.push(w_val);
         }
-        (yv, wv)
-    } else {
-        let mut yv = Vec::new();
-        let mut wv = Vec::new();
-        for ((yi, wi), mi) in y.iter().zip(weights.iter()).zip(domain_mask.iter()) {
-            if let (Some(y_val), Some(w_val), Some(true)) = (yi, wi, mi)
-                && w_val > 0.0
-            {
-                yv.push(y_val);
-                wv.push(w_val);
-            }
+    }
+    srs_mean_from(&yv, &wv, srs)
+}
+
+/// [`srs_variance_mean_domain`] over slices and a domain's flags.
+pub(crate) fn srs_variance_mean_flags(
+    ys: &[f64],
+    ws: &[f64],
+    in_domain: &[bool],
+    srs: SrsRef,
+) -> EResult<f64> {
+    let mut yv = Vec::new();
+    let mut wv = Vec::new();
+    for i in 0..ys.len() {
+        // w > 0 as in srs_variance_mean: counting zero-weight rows would inflate n and deff.
+        if in_domain[i] && ws[i] > 0.0 {
+            yv.push(ys[i]);
+            wv.push(ws[i]);
         }
-        (yv, wv)
+    }
+    srs_mean_from(&yv, &wv, srs)
+}
+
+/// A domain mean's estimate, scores (as the variance's array) and SRS variance, reading the mask
+/// once; `None` when the domain has no weight.
+pub(crate) fn mean_domain_parts(
+    y: &Float64Chunked,
+    weights: &Float64Chunked,
+    domain_mask: &BooleanChunked,
+    srs: SrsRef,
+) -> EResult<Option<(f64, Vec<f64>, f64)>> {
+    if let Some((ys, ws)) = cont_pair(y, weights) {
+        let flags = mask_flags(domain_mask);
+        let Ok(estimate) = point_estimate_mean_flags(ys, ws, &flags) else {
+            return Ok(None);
+        };
+        let scores = scores_mean_flags(ys, ws, &flags);
+        let srs_var = srs_variance_mean_flags(ys, ws, &flags, srs)?;
+        return Ok(Some((estimate, scores, srs_var)));
+    }
+    let Ok(estimate) = point_estimate_mean_domain(y, weights, domain_mask) else {
+        return Ok(None);
     };
-    let n = yv.len() as f64;
-    if n < 2.0 {
-        return Ok(f64::NAN);
-    }
-    let sum_w: f64 = wv.iter().sum();
-    if sum_w <= 0.0 {
-        return Ok(f64::NAN);
-    }
-    let wn: Vec<f64> = wv.iter().map(|w| w / sum_w).collect();
-    let s2_y = weighted_s2(&yv, &wn);
-    Ok((s2_y / n) * srs.fpc(n, sum_w))
+    let scores = scores_mean_domain(y, weights, domain_mask)?
+        .iter()
+        .map(|s| s.unwrap_or(0.0))
+        .collect();
+    let srs_var = srs_variance_mean_domain(y, weights, domain_mask, srs)?;
+    Ok(Some((estimate, scores, srs_var)))
 }
 
 pub(crate) fn srs_variance_total(

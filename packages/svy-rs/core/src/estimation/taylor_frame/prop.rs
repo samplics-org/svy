@@ -336,28 +336,20 @@ pub fn compute_levels_grouped(
             let n_domain = active_count(weights, Some(&domain_mask));
             let mut out: Vec<PropRow> = Vec::with_capacity(levels.len());
             for (lvl, indicator_ca) in levels.iter().zip(&indicators) {
-                let (estimate, scores, srs_var) = match scale {
+                let (estimate, scores_arr, srs_var) = match scale {
                     LevelScale::Share => {
-                        match point_estimate_mean_domain(indicator_ca, weights, &domain_mask) {
-                            Ok(estimate) => (
-                                estimate,
-                                scores_mean_domain(indicator_ca, weights, &domain_mask)?,
-                                srs_variance_mean_domain(indicator_ca, weights, &domain_mask, srs)?,
-                            ),
-                            Err(_) => (
-                                f64::NAN,
-                                Float64Chunked::full("scores".into(), 0.0, indicator_ca.len()),
-                                f64::NAN,
-                            ),
-                        }
+                        mean_domain_parts(indicator_ca, weights, &domain_mask, srs)?
+                            .unwrap_or_else(|| (f64::NAN, vec![0.0; indicator_ca.len()], f64::NAN))
                     }
                     LevelScale::Count => (
                         point_estimate_total_domain(indicator_ca, weights, &domain_mask)?,
-                        scores_total_domain(indicator_ca, weights, &domain_mask)?,
+                        scores_total_domain(indicator_ca, weights, &domain_mask)?
+                            .iter()
+                            .map(|s| s.unwrap_or(0.0))
+                            .collect(),
                         srs_variance_total_domain(indicator_ca, weights, &domain_mask, srs)?,
                     ),
                 };
-                let scores_arr: Vec<f64> = scores.iter().map(|s| s.unwrap_or(0.0)).collect();
                 let (variance, se) = var_se(
                     estimate,
                     taylor_variance_apply_in(&scores_arr, &design, active.as_deref()),
