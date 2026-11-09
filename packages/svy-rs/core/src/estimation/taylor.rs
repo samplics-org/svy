@@ -359,29 +359,44 @@ pub fn weighted_quantile(y_sorted: &[f64], cdf: &[f64], p: f64, method: SvyQuant
         ((idx.saturating_sub(1)), idx.min(n - 1))
     };
 
+    quantile_in_bracket(
+        method,
+        p,
+        (y_sorted[left], cdf[left]),
+        (y_sorted[right], cdf[right]),
+        right != left,
+    )
+}
+
+/// The quantile rule once `p` is bracketed by the `(value, cdf)` points `left` and `right`;
+/// `distinct` says they are two positions, not one.
+pub(crate) fn quantile_in_bracket(
+    method: SvyQuantileMethod,
+    p: f64,
+    left: (f64, f64),
+    right: (f64, f64),
+    distinct: bool,
+) -> f64 {
+    let ((y_left, cdf_left), (y_right, cdf_right)) = (left, right);
     match method {
-        SvyQuantileMethod::Lower => y_sorted[left],
-        SvyQuantileMethod::Higher => y_sorted[right],
-        SvyQuantileMethod::Middle => (y_sorted[left] + y_sorted[right]) / 2.0,
+        SvyQuantileMethod::Lower => y_left,
+        SvyQuantileMethod::Higher => y_right,
+        SvyQuantileMethod::Middle => (y_left + y_right) / 2.0,
         SvyQuantileMethod::Nearest => {
-            let dl = (p - cdf[left]).abs();
-            let dr = (cdf[right] - p).abs();
-            if dl <= dr {
-                y_sorted[left]
-            } else {
-                y_sorted[right]
-            }
+            let dl = (p - cdf_left).abs();
+            let dr = (cdf_right - p).abs();
+            if dl <= dr { y_left } else { y_right }
         }
         SvyQuantileMethod::Linear => {
-            let denom = cdf[right] - cdf[left];
+            let denom = cdf_right - cdf_left;
             if denom <= 0.0 {
-                return y_sorted[left];
+                return y_left;
             }
-            if (p - cdf[left]).abs() < 1e-12 && right != left {
-                return (y_sorted[left] + y_sorted[right]) / 2.0;
+            if (p - cdf_left).abs() < 1e-12 && distinct {
+                return (y_left + y_right) / 2.0;
             }
-            let w = (p - cdf[left]) / denom;
-            (1.0 - w) * y_sorted[left] + w * y_sorted[right]
+            let w = (p - cdf_left) / denom;
+            (1.0 - w) * y_left + w * y_right
         }
     }
 }
