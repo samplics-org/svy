@@ -94,8 +94,11 @@ def test_equals_drop_nulls_path(samples, design):
     b = samples[design].glm.fit(
         y="y", x=["z", Cat("cat")], where=W, drop_nulls=True, method=method
     )
-    assert [(c.est, c.se) for c in a.fitted.coefs] == pytest.approx(
-        [(c.est, c.se) for c in b.fitted.coefs], rel=1e-12
+    assert [c.est for c in a.fitted.coefs] == pytest.approx(
+        [c.est for c in b.fitted.coefs], rel=1e-12
+    )
+    assert [c.se for c in a.fitted.coefs] == pytest.approx(
+        [c.se for c in b.fitted.coefs], rel=1e-12
     )
 
 
