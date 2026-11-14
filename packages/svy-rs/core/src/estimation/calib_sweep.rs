@@ -73,16 +73,17 @@ impl CalibSweep {
             self.new_w.len(),
             "calibration sweep length mismatch"
         );
+        let free_total = if self.pins_total {
+            None
+        } else {
+            self.in_scope_mean(x)
+        };
         match self.kind {
             SweepKind::Cells => {
                 if self.cells.is_empty() {
                     return;
                 }
-                if self.pins_total {
-                    self.sweep_cells(x, 0);
-                } else {
-                    self.sweep_shares(x);
-                }
+                self.sweep_cells(x, 0);
             }
             SweepKind::Raking => {
                 for _ in 0..RAKE_ITERATIONS {
@@ -93,6 +94,38 @@ impl CalibSweep {
             }
             SweepKind::Greg => self.sweep_greg(x),
         }
+        if let Some(mean) = free_total {
+            for (i, xi) in x.iter_mut().enumerate() {
+                if self.in_scope(i) {
+                    *xi += self.prev_w[i] * mean;
+                }
+            }
+        }
+    }
+
+    fn in_scope(&self, i: usize) -> bool {
+        match self.kind {
+            SweepKind::Cells | SweepKind::Raking => {
+                !self.cells.is_empty() && self.cells.iter().all(|c| c[i] != OUT_OF_SCOPE)
+            }
+            SweepKind::Greg => {
+                !self.aux.is_empty() && self.aux.iter().all(|col| col[i].is_finite())
+            }
+        }
+    }
+
+    /// `(sum_j x_j) / (sum_j prev_w_j)` over in-scope rows: when `shares` leave the
+    /// grand total at `N_hat = sum_j prev_w_j`, differentiating `T = N_hat * sum_c s_c ybar_c`
+    /// adds `prev_w_i * T / N_hat` to the fixed-total sweep (zero for means and ratios).
+    fn in_scope_mean(&self, x: &[f64]) -> Option<f64> {
+        let (mut sum_x, mut sum_w) = (0.0, 0.0);
+        for (i, &xi) in x.iter().enumerate() {
+            if self.in_scope(i) {
+                sum_x += xi;
+                sum_w += self.prev_w[i];
+            }
+        }
+        (sum_w != 0.0).then_some(sum_x / sum_w)
     }
 
     /// Ordinary poststratification: subtract the previous-weight cell mean.
@@ -119,42 +152,6 @@ impl CalibSweep {
                 x[i] -= (num[c] / den[c]) * self.new_w[i];
             }
         }
-    }
-
-    /// `shares` pin composition, not level: the GREG residual on `u_c = delta_c - s_c`, c < k.
-    /// `s_c` is not on the record because the achieved composition IS the shares.
-    fn sweep_shares(&self, x: &mut [f64]) {
-        let codes = &self.cells[0];
-        let k = self.n_cells[0];
-        if k < 2 {
-            return;
-        }
-        let mut cell_w = vec![0.0; k];
-        let mut total = 0.0;
-        for (i, &c) in codes.iter().enumerate().take(x.len()) {
-            if c == OUT_OF_SCOPE {
-                continue;
-            }
-            cell_w[c as usize] += self.new_w[i];
-            total += self.new_w[i];
-        }
-        if total == 0.0 {
-            return;
-        }
-        let shares: Vec<f64> = cell_w.iter().map(|w| w / total).collect();
-
-        // One column per cell but the last: they are linearly dependent.
-        let mut aux = vec![vec![0.0; x.len()]; k - 1];
-        for i in 0..x.len() {
-            let c = codes[i];
-            if c == OUT_OF_SCOPE {
-                continue;
-            }
-            for (j, col) in aux.iter_mut().enumerate() {
-                col[i] = f64::from(c as usize == j) - shares[j];
-            }
-        }
-        self.wls_residual(x, &aux);
     }
 
     /// R rakes with the UNWEIGHTED group mean of `x / w`, unlike poststratification; matched.
@@ -480,20 +477,63 @@ mod tests {
 
     #[test]
     fn rows_out_of_scope_are_left_alone() {
-        let mut codes = ROW.to_vec();
-        codes[0] = OUT_OF_SCOPE;
+        for pins_total in [true, false] {
+            let mut codes = ROW.to_vec();
+            codes[0] = OUT_OF_SCOPE;
+            let calib = CalibSweep::new(
+                SweepKind::Cells,
+                vec![codes],
+                vec![2],
+                vec![],
+                W.to_vec(),
+                PS_W.to_vec(),
+                pins_total,
+            );
+            let mut x: Vec<f64> = (0..N).map(|i| PS_W[i] * Y[i]).collect();
+            let before = x[0];
+            calib.apply(&mut x);
+            assert_eq!(x[0], before);
+        }
+    }
+
+    #[test]
+    fn shares_total_se_matches_delta_method() {
+        // PS_W sums to 28 (15 + 13), W sums to 23; rescaling PS_W by 23/28 gives the
+        // poststratify(shares={0: 15, 1: 13}) weights. R's svycontrast on the four cell
+        // totals (n0 + n1) * ((15/28) * y0/n0 + (13/28) * y1/n1) gives 11.9492992144835082.
+        let ps_shares_w: [f64; N] = PS_W.map(|w| w * 23.0 / 28.0);
         let calib = CalibSweep::new(
             SweepKind::Cells,
-            vec![codes],
+            vec![ROW.to_vec()],
             vec![2],
             vec![],
             W.to_vec(),
-            PS_W.to_vec(),
-            true,
+            ps_shares_w.to_vec(),
+            false,
         );
-        let mut x: Vec<f64> = (0..N).map(|i| PS_W[i] * Y[i]).collect();
-        let before = x[0];
-        calib.apply(&mut x);
-        assert_eq!(x[0], before);
+        let got = total_se(&calib, &ps_shares_w);
+        assert_relative_eq!(got, 11.9492992144835082, max_relative = 1e-12);
+    }
+
+    #[test]
+    fn shares_leave_the_grand_total_with_base_weight_scores() {
+        // When sum_i w*_i == sum_i w_i, the score of the total of `one` (x_i = w*_i)
+        // must sweep to w_i under every SweepKind.
+        for (kind, base_w) in [
+            (SweepKind::Cells, &PS_W),
+            (SweepKind::Raking, &RAKE_W),
+            (SweepKind::Greg, &GREG_W),
+        ] {
+            let w_sum: f64 = W.iter().sum();
+            let b_sum: f64 = base_w.iter().sum();
+            let new_w: [f64; N] = base_w.map(|w| w * w_sum / b_sum);
+            let mut calib = sweep(kind, &new_w);
+            calib.pins_total = false;
+            let mut x = new_w.to_vec();
+            calib.apply(&mut x);
+            for i in 0..N {
+                assert_abs_diff_eq!(x[i], W[i], epsilon = 1e-12);
+            }
+        }
     }
 }

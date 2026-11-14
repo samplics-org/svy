@@ -211,17 +211,64 @@ def test_standardize_se_matches_r(design):
     assert_allclose(got["se"].to_numpy(), R_STD_SE, rtol=1e-6)
 
 
+# svycontrast(svytotal(~y_E + n_E + y_H + n_H + y_M + n_M, d),
+#             quote((n_E + n_H + n_M) * (sE * y_E/n_E + sH * y_H/n_H + sM * y_M/n_M)))
+R_PS_SHARES_TOTAL_SE = 890698.5144681229
+
+
 def test_shares_pin_composition_but_not_the_total(design):
     """shares and controls differ in WHAT they pin, so they differ in variance.
 
-    There is no R analog -- postStratify has no shares form -- so this is svy's
-    own semantics: shares remove k-1 constraints (composition), controls remove
-    k (composition and level). A cell proportion therefore has no sampling error
-    while the population size still does.
+    With shares s_c and the weight total left free at N_hat = sum_i w_i, the
+    poststratified total is N_hat * sum_c s_c * ybar_c, whose delta-method
+    score is w*_i (y_i - ybar_c) + w_i * T / N_hat. A cell proportion therefore
+    has no sampling error, the total of `one` has the exact SE of N_hat, a cell
+    total has SE s_c * SE(N_hat), and a general total matches R's svycontrast.
     """
+    base_n_se = _total_se(design(), "one")
     ps = design().weighting.poststratify(shares=STYPE_POP, cells="stype")
     assert _mean_se(ps, "is_E") == pytest.approx(0.0, abs=1e-9)
-    assert _total_se(ps, "one") > 1.0
+    assert_allclose(_total_se(ps, "one"), base_n_se, rtol=1e-12)
+    assert_allclose(_total_se(ps, "is_E"), (4421.0 / POP_TOTAL) * base_n_se, rtol=1e-12)
+    assert_allclose(_total_se(ps, "api00"), R_PS_SHARES_TOTAL_SE, rtol=1e-9)
+
+    rk = design().weighting.rake(
+        shares={"stype": STYPE_POP, "sch.wide": SCHWIDE_POP}, tol=1e-12, max_iter=200
+    )
+    assert _mean_se(rk, "is_E") == pytest.approx(0.0, abs=1e-9)
+    assert_allclose(_mean_se(rk), R_RAKE_MEAN_SE, rtol=1e-9)
+    assert_allclose(_total_se(rk, "one"), base_n_se, rtol=1e-12)
+    assert_allclose(_total_se(rk, "is_E"), (4421.0 / POP_TOTAL) * base_n_se, rtol=1e-9)
+
+
+def test_poststratify_shares_total_se_matches_delta_method():
+    """Issue #452: T = N_hat * sum_c s_c * ybar_c has score w*_i (y_i - ybar_c) + w_i * T / N_hat."""
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    n_psu = 24
+    psu = np.repeat(np.arange(n_psu), rng.integers(3, 10, n_psu))
+    n = len(psu)
+    cell = rng.choice(["a", "b", "c"], n, p=[0.5, 0.3, 0.2])
+    y = rng.poisson(2 + (cell == "a") + 0.8 * rng.normal(size=n_psu)[psu] ** 2).astype(float)
+    w = np.round(rng.uniform(0.5, 4, n), 3)
+    shares = {"a": 0.6, "b": 0.25, "c": 0.15}
+    df = pl.DataFrame({"psu": psu, "cell": cell, "y": y, "w": w})
+
+    ps = Sample(df, Design(wgt="w", psu="psu")).weighting.poststratify(shares=shares, cells="cell")
+    got = ps.estimation.total("y").to_polars().row(0, named=True)
+
+    N = w.sum()
+    Nc = {c: w[cell == c].sum() for c in shares}
+    ybar = {c: (w * y)[cell == c].sum() / Nc[c] for c in shares}
+    g = np.array([shares[c] * N / Nc[c] for c in cell])
+    T = (w * g * y).sum()
+    score = w * (T / N + g * (y - np.array([ybar[c] for c in cell])))
+    totals = np.bincount(psu, weights=score)
+    se_delta = float(np.sqrt(n_psu / (n_psu - 1) * ((totals - totals.mean()) ** 2).sum()))
+
+    assert_allclose(got["est"], T, rtol=1e-12)
+    assert_allclose(got["se"], se_delta, rtol=1e-12)
 
 
 def test_calibrated_auxiliary_total_has_no_sampling_error(design):

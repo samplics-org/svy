@@ -201,19 +201,6 @@ def _margin_matrix(
     return np.column_stack(cols), np.asarray(totals)
 
 
-def _share_contrasts(
-    margin_indices: list[np.ndarray], margin_targets: list[np.ndarray]
-) -> np.ndarray:
-    """Each margin's levels after the first, less their share: what ``shares`` pin. The grand
-    total stays free, as ``poststratify(shares=)`` leaves it."""
-    cols = []
-    for codes, targets in zip(margin_indices, margin_targets):
-        share = targets / targets.sum()
-        for level in range(1, len(targets)):
-            cols.append((codes == level).astype(np.float64) - share[level])
-    return np.column_stack(cols)
-
-
 def _rake_bounded(
     sample: Sample,
     solve: BoundedSolve,
@@ -286,11 +273,11 @@ def _rake_bounded(
     new_w = _full(raked[:, 0], df.get_column(wgt).to_numpy().astype(np.float64))
     df = df.with_columns(pl.Series(name=wgt_name, values=new_w))
     if update_design_wgts:
-        aux = X if pins_total else _share_contrasts(margin_indices, margin_targets)
-        aux_cols = [f"{AUX_PREFIX}{wgt_name}_{j}" for j in range(aux.shape[1])]
+        aux_cols = [f"{AUX_PREFIX}{wgt_name}_{j}" for j in range(X.shape[1])]
+        out_of_scope = np.full(df.height, np.nan)
         df = df.with_columns(
             [
-                pl.Series(name=c, values=_full(aux[:, j], np.zeros(df.height)))
+                pl.Series(name=c, values=_full(X[:, j], out_of_scope))
                 for j, c in enumerate(aux_cols)
             ]
         )
@@ -299,7 +286,11 @@ def _rake_bounded(
             wgt=wgt_name,
             rep_wgts=None if ignore_reps else sample._design.rep_wgts,
             wgt_adjustment=WgtAdjustment(
-                kind="calibration", prev_wgt=wgt, new_wgt=wgt_name, aux=tuple(aux_cols)
+                kind="calibration",
+                prev_wgt=wgt,
+                new_wgt=wgt_name,
+                aux=tuple(aux_cols),
+                pins_total=pins_total,
             ),
         )
     if raked_reps is not None and design.rep_wgts is not None:
