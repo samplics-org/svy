@@ -192,13 +192,25 @@ def test_shares_rake_like_their_controls(clus):
 
 def test_controls_pin_the_total_and_shares_do_not(clus):
     df = clus.with_columns(pl.lit(1.0).alias("one"))
+    base = _clus(df)
     total = float(clus["pw"].sum())
     shares = {v: {k: x / 6194.0 for k, x in levels.items()} for v, levels in CLUS.items()}
-    by_controls = _clus(df).weighting.rake(controls=CLUS, bounds=(0.5, 1.6), **TIGHT)
-    by_shares = _clus(df).weighting.rake(shares=shares, bounds=(0.5, 1.6), **TIGHT)
+    by_controls = base.weighting.rake(controls=CLUS, bounds=(0.5, 1.6), **TIGHT)
+    by_shares = base.weighting.rake(shares=shares, bounds=(0.5, 1.6), **TIGHT)
+    assert by_controls.design.wgt_adjustment.pins_total is True
+    assert by_shares.design.wgt_adjustment.pins_total is False
     assert by_controls.estimation.total("one").to_polars()["se"][0] < 1e-6 * 6194
     assert_allclose(by_shares.estimation.total("one").to_polars()["est"][0], total, rtol=1e-10)
-    assert by_shares.estimation.total("one").to_polars()["se"][0] > 0.01 * total
+    assert_allclose(
+        by_shares.estimation.total("one").to_polars()["se"][0],
+        base.estimation.total("one").to_polars()["se"][0],
+        rtol=1e-10,
+    )
+    assert_allclose(
+        by_shares.estimation.mean("api00").to_polars()["se"][0],
+        by_controls.estimation.mean("api00").to_polars()["se"][0],
+        rtol=1e-10,
+    )
 
 
 def test_where_rakes_only_the_scoped_rows(clus):
