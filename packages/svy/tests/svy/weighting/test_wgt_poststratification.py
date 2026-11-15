@@ -332,3 +332,22 @@ def test_poststratify_tuple_key_factors_mismatch_raises(mock_design):
     }
     with pytest.raises(Exception, match="mismatch|missing|Mapping keys"):
         sample.weighting.poststratify(shares=bad_factors, cells=("region", "sex"))
+
+
+def test_poststratify_shares_preserves_each_replicate_total(sample_data, mock_design):
+    """Under shares=, each replicate keeps its own sum(w^(r)) rather than the full-sample N_hat."""
+    df = sample_data.with_columns(
+        pl.Series("rw1", [12.0, 8.0, 20.0, 20.0, 30.0, 30.0]),  # sum = 120
+        pl.Series("rw2", [15.0, 15.0, 30.0, 30.0, 45.0, 45.0]),  # sum = 180
+        pl.lit(1.0).alias("one"),
+    )
+    sample = Sample(data=df, design=mock_design)
+    sample._design = sample.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
+
+    out = sample.weighting.poststratify(shares={"A": 0.25, "B": 0.75}, cells="domain")
+    rep_sums = out.data.select([f"{PS_WGT}1", f"{PS_WGT}2"]).to_numpy().sum(axis=0)
+    assert_allclose(rep_sums, [120.0, 180.0], rtol=1e-12)
+    # Replicate SE of total("one") equals base replicate SE of N_hat (nonzero).
+    base_se = sample.estimation.total("one", method="replication").to_polars()["se"][0]
+    ps_se = out.estimation.total("one", method="replication").to_polars()["se"][0]
+    assert_allclose(ps_se, base_se, rtol=1e-12)

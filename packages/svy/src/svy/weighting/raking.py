@@ -266,9 +266,27 @@ def _rake_bounded(
     raked_reps = None
     if rep_cols:
         before = df.select(rep_cols).to_numpy().astype(np.float64)
-        out, achieved_r, steps_r = solve_bounded(
-            _in_scope(before), X, solve, scale=ones, totals=totals
-        )
+        scoped_before = _in_scope(before)
+        if pins_total or float(w0.sum()) <= 0:
+            out, achieved_r, steps_r = solve_bounded(
+                scoped_before, X, solve, scale=ones, totals=totals
+            )
+        else:
+            # `shares` preserves each replicate's own in-scope weight sum N^(r)
+            # so bounds on g = w*^(r) / w^(r) apply relative to each replicate.
+            full_sum = float(w0.sum())
+            out = np.empty_like(scoped_before)
+            achieved_list = []
+            steps_list = []
+            for j in range(scoped_before.shape[1]):
+                col = scoped_before[:, j : j + 1]
+                rep_totals = totals * (float(col.sum()) / full_sum)
+                out_j, ach_j, st_j = solve_bounded(col, X, solve, scale=ones, totals=rep_totals)
+                out[:, j] = out_j[:, 0]
+                achieved_list.append(ach_j[0])
+                steps_list.append(st_j[0])
+            achieved_r = np.asarray(achieved_list, dtype=np.float64)
+            steps_r = np.asarray(steps_list, dtype=np.int64)
         rep_err = not_converged(
             solve,
             achieved_r,
@@ -661,15 +679,25 @@ def rake(
             # as starting point. Cycling replicates is not standard practice.
             if scope_idx is None:
                 raked_reps = rust_rake(wgts_arr, margin_indices, margin_targets, tol, max_iter)
+                if controls_norm is None:
+                    full_sum = float(w0.sum())
+                    if full_sum > 0:
+                        raked_reps *= wgts_arr.sum(axis=0) / full_sum
             else:
                 raked_reps = wgts_arr.copy()
-                raked_reps[scope_idx] = rust_rake(
-                    np.ascontiguousarray(wgts_arr[scope_idx]),
+                scoped_reps = np.ascontiguousarray(wgts_arr[scope_idx])
+                raked_scoped = rust_rake(
+                    scoped_reps,
                     margin_indices,
                     margin_targets,
                     tol,
                     max_iter,
                 )
+                if controls_norm is None:
+                    full_sum = float(w0.sum())
+                    if full_sum > 0:
+                        raked_scoped *= scoped_reps.sum(axis=0) / full_sum
+                raked_reps[scope_idx] = raked_scoped
 
             new_rep_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
             wgts_df = pl.DataFrame(raked_reps, schema=new_rep_names)
