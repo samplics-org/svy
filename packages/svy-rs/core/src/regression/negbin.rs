@@ -207,6 +207,7 @@ pub(crate) fn fit_negbin(
         strata,
         psu,
         fpc,
+        calib,
         singleton,
         domain_mask,
     )?;
@@ -282,6 +283,7 @@ fn joint_vcov(
     strata: Option<&Series>,
     psu: Option<&Series>,
     fpc: Option<&Series>,
+    calib: Option<&CalibSweep>,
     singleton: SingletonRule,
     domain_mask: Option<&[bool]>,
 ) -> RResult<(Vec<f64>, f64)> {
@@ -371,6 +373,11 @@ fn joint_vcov(
             }
         }
     }
+    if let Some(c) = calib {
+        for col in 0..p {
+            c.apply(&mut influence[col * n..(col + 1) * n]);
+        }
+    }
 
     let (strata_idx, n_strata) = match strata {
         Some(_) => design_codes(strata, None, n)?,
@@ -398,7 +405,8 @@ fn joint_vcov(
     };
 
     // The domain's rows whatever their weight, as in `fit_glm_domain`.
-    let active = (singleton != SingletonRule::NONE).then(|| {
+    // Calibrated scores are nonzero outside the domain, so active covers the whole frame.
+    let active = (calib.is_none() && singleton != SingletonRule::NONE).then(|| {
         (0..n)
             .map(|i| domain_mask.is_none_or(|m| m[i]))
             .collect::<Vec<_>>()
@@ -498,5 +506,68 @@ mod tests {
             max_relative = 1e-6
         );
         assert!(result.converged);
+    }
+
+    #[test]
+    fn joint_fit_poststratified_se_matches_r() {
+        use crate::estimation::calib_sweep::{CalibSweep, SweepKind};
+        use crate::test_fixtures::{ROW, psu, strata};
+
+        // PS_W from test_fixtures postStratify(~r, {x: 15, y: 13}).
+        let ps_w: [f64; N] = [
+            2.0454545454545454,
+            2.1666666666666665,
+            1.3636363636363635,
+            3.2500000000000000,
+            2.7083333333333330,
+            1.3636363636363635,
+            2.7272727272727271,
+            1.6250000000000000,
+            4.0909090909090908,
+            1.0833333333333333,
+            2.1666666666666665,
+            3.4090909090909083,
+        ];
+        let calib = CalibSweep::new(
+            SweepKind::Cells,
+            vec![ROW.to_vec()],
+            vec![2],
+            vec![],
+            W.to_vec(),
+            ps_w.to_vec(),
+            true,
+        );
+        let series = |name: &str, v: &[f64]| Series::new(name.into(), v);
+        let st = strata().into_series();
+        let ps_col = psu().into_series();
+        let result = fit_negbin(
+            &series("k", &COUNTS),
+            vec![series("one", &[1.0; N]), series("x2", &X2)],
+            &series("w", &ps_w),
+            Some(&st),
+            Some(&ps_col),
+            None,
+            None,
+            None,
+            "log",
+            None,
+            1e-12,
+            100,
+            Some(&calib),
+            SingletonRule::NONE,
+        )
+        .unwrap();
+
+        // R survey::svymle on postStratify(des, ~r, Freq = c(15, 13)).
+        let r_se = [0.8019296461488522, 0.3218587332874025];
+        for (a, want_se) in r_se.iter().enumerate() {
+            let got_se = result.cov_params[a * 2 + a].max(0.0).sqrt();
+            assert_relative_eq!(got_se, want_se, max_relative = 1e-5);
+        }
+        assert_relative_eq!(
+            result.theta_se.unwrap(),
+            0.45779058407163503,
+            max_relative = 1e-5
+        );
     }
 }

@@ -374,3 +374,33 @@ class TestDomain:
             [c.est for c in domain.coefs], [c.est for c in filtered.coefs], rtol=1e-7
         )
         np.testing.assert_allclose(domain.stats.theta, filtered.stats.theta, rtol=1e-7)
+
+
+def test_poststratified_estimated_theta_matches_r():
+    """Joint (beta, theta) sandwich sweeps calibration scores on calibrated designs."""
+    df = pl.read_csv(DATA_DIR / "apiclus1.csv", null_values=["NA"])
+    s = Sample(df, Design(wgt="pw", psu="dnum", pop_size="fpc")).weighting.poststratify(
+        {"E": 4421.0, "H": 755.0, "M": 1018.0}, cells="stype"
+    )
+    res = s.glm.fit(y=Y, x=X_COLS, family="negative_binomial", tol=TOL_TIGHT)
+
+    # survey::svymle on postStratify(svydesign(id=~dnum, weights=~pw, fpc=~fpc, data=apiclus1), ...)
+    r_beta = [
+        6.6516388174127608,
+        -0.0011968897148815583,
+        -0.0036568031116876783,
+        -0.003261286707719351,
+    ]
+    r_se = [
+        0.25502127514673756,
+        0.0076413122160864334,
+        0.0020992504249346591,
+        0.0036862907783722296,
+    ]
+    r_theta = 2.9497656625794595
+    r_theta_se = 0.40026466166386226
+
+    np.testing.assert_allclose([c.est for c in res.coefs], r_beta, rtol=RTOL, atol=ATOL)
+    np.testing.assert_allclose([c.se for c in res.coefs], r_se, rtol=RTOL, atol=ATOL)
+    np.testing.assert_allclose(res.stats.theta, r_theta, rtol=RTOL, atol=ATOL)
+    np.testing.assert_allclose(res.stats.theta_se, r_theta_se, rtol=RTOL, atol=ATOL)
