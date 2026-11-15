@@ -22,6 +22,7 @@ import numpy as np
 import polars as pl
 import svy_rs as rs
 
+from svy.core.data_prep import calib_kwargs
 from svy.core.enumerations import PopParam
 from svy.core.repwgts import RepWgts
 from svy.errors import Code, EstimationError
@@ -303,6 +304,7 @@ def taylor_assoc(
         singleton_method=singleton_method,
         domain_rows_col=prep.domain_col,
         deff_ref=deff_ref,
+        **calib_kwargs(est._sample, df),
     )
     result_df, _ = est._apply_scale_adjustment(result_df, prep=prep)
 

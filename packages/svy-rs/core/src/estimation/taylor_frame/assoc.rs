@@ -16,6 +16,7 @@ pub fn compute_assoc(
     singleton_method: Option<&str>,
     domain_rows_col: Option<&str>,
     srs: SrsRef,
+    calib: Option<CalibSweep>,
 ) -> EResult<DataFrame> {
     let weights = df.column(weight_col)?.f64()?;
     let rows = rows_column(df, domain_rows_col)?;
@@ -39,7 +40,8 @@ pub fn compute_assoc(
         .map(|c| df.column(c).and_then(|s| s.f64()))
         .collect::<PolarsResult<Vec<_>>>()?;
 
-    let design = build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?;
+    let design =
+        build_taylor_design(strata, psu, ssu, fpc, fpc_ssu, singleton_method)?.with_calib(calib);
 
     // Ungrouped runs as a single unmasked group, so one fan-out covers both shapes.
     let by_str = by_col
@@ -131,4 +133,71 @@ pub fn compute_assoc(
         out.insert_column(0, Column::new(name.into(), by_vals))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::excessive_precision)]
+mod tests {
+    use super::*;
+    use crate::estimation::calib_sweep::{CalibSweep, SweepKind};
+    use crate::test_fixtures::{N, ROW, W, X2, Y, floats, psu, strata};
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn poststratified_cov_se_matches_r() {
+        let ps_w: [f64; N] = [
+            2.0454545454545454,
+            2.1666666666666665,
+            1.3636363636363635,
+            3.2500000000000000,
+            2.7083333333333330,
+            1.3636363636363635,
+            2.7272727272727271,
+            1.6250000000000000,
+            4.0909090909090908,
+            1.0833333333333333,
+            2.1666666666666665,
+            3.4090909090909083,
+        ];
+        let df = DataFrame::new_infer_height(vec![
+            strata().into_column(),
+            psu().into_column(),
+            floats("w", &ps_w).into_column(),
+            floats("y", &Y).into_column(),
+            floats("x2", &X2).into_column(),
+        ])
+        .unwrap();
+        let calib = CalibSweep::new(
+            SweepKind::Cells,
+            vec![ROW.to_vec()],
+            vec![2],
+            vec![],
+            W.to_vec(),
+            ps_w.to_vec(),
+            true,
+        );
+        let out = compute_assoc(
+            &df,
+            &["y".into()],
+            &["x2".into()],
+            AssocKind::Cov,
+            "w",
+            Some("st"),
+            Some("psu"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SrsRef::Wor,
+            Some(calib),
+        )
+        .unwrap();
+        let est = out.column("est").unwrap().f64().unwrap().get(0).unwrap();
+        let se = out.column("se").unwrap().f64().unwrap().get(0).unwrap();
+        // R survey::svyvar(~y + x2, postStratify(des, ~r, Freq = c(15, 13)))
+        assert_relative_eq!(est, 1.2819023711217206, max_relative = 1e-12);
+        assert_relative_eq!(se, 0.61115052028652095, max_relative = 1e-12);
+    }
 }

@@ -308,3 +308,18 @@ def test_pandas_style_method_is_redirected_to_kind(sample):
 def test_mixed_cols_are_rejected(sample):
     with pytest.raises(EstimationError, match="mixes column names and pairs"):
         sample.estimation.corr(["y", ("x", "z")])
+
+
+def test_poststratified_cov_se_matches_r():
+    """cov() Taylor SE sweeps calibration scores, matching R survey::svyvar."""
+    from pathlib import Path
+
+    data_dir = Path(__file__).resolve().parents[2] / "test_data"
+    df = pl.read_csv(data_dir / "apiclus1.csv", null_values=["NA"])
+    ps = Sample(df, Design(wgt="pw", psu="dnum", pop_size="fpc")).weighting.poststratify(
+        {"E": 4421.0, "H": 755.0, "M": 1018.0}, cells="stype"
+    )
+    row = _row(ps.estimation.cov([("api00", "api99")]))
+    # R: svyvar(~api00 + api99, postStratify(d, ~stype, ...))
+    assert row["est"] == pytest.approx(11417.607609712773, rel=1e-12)
+    assert row["se"] == pytest.approx(1494.210373208552, rel=1e-9)
