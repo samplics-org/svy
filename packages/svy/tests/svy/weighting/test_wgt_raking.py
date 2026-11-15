@@ -200,6 +200,26 @@ def test_rake_replicate_weights_custom_wgt_name(sample_data_for_raking, mock_des
     assert sample.design.rep_wgts.prefix == "my_rk"
 
 
+def test_rake_shares_preserves_each_replicate_total(sample_data_for_raking, mock_design):
+    """Under shares=, each replicate keeps its own sum(w^(r)) rather than the full-sample N_hat."""
+    import polars as pl
+
+    n = sample_data_for_raking.height
+    df = sample_data_for_raking.with_columns(
+        pl.Series("rw1", [1.0] * n),
+        pl.Series("rw2", [2.5] * n),
+    )
+    sample = Sample(data=df, design=mock_design)
+    sample._design = sample.design.update_rep_weights(method="Bootstrap", prefix="rw", n_reps=2)
+    shares = {
+        "age_group": {"18-34": 0.4, "35-54": 0.4, "55+": 0.2},
+        "region": {"North": 0.6, "South": 0.4},
+    }
+    out = sample.weighting.rake(shares=shares, tol=1e-12, max_iter=200)
+    rep_sums = out.data.select([f"{RK_WGT}1", f"{RK_WGT}2"]).to_numpy().sum(axis=0)
+    assert_allclose(rep_sums, [float(n), 2.5 * n], rtol=1e-10)
+
+
 # ---------------------------------------------------------------------------
 # Convergence / error cases
 # ---------------------------------------------------------------------------

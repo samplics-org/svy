@@ -29,6 +29,7 @@ from svy.weighting._engine import (
     CellSpec,
     build_cells,
     control_name,
+    in_scope_sum,
     materialize_cells,
     record_null_cells,
     record_trim_cycle,
@@ -203,7 +204,24 @@ def poststratify(
     if not ignore_reps and design.rep_wgts is not None:
         rep_cols = design.rep_wgts.columns
         if rep_cols:
-            adj = scale_to_targets(df.select(rep_cols).to_numpy(), spec, targets)
+            rep_in = df.select(rep_cols).to_numpy()
+            adj = scale_to_targets(rep_in, spec, targets)
+            if controls is None:
+                # `shares` pins composition only; each replicate preserves its own
+                # in-scope weight sum N^(r) rather than the full-sample N_hat.
+                full_sum = in_scope_sum(wgt_arr, spec)
+                if full_sum > 0:
+                    scope_mask = spec.in_scope
+                    rep_sums = (
+                        rep_in.sum(axis=0)
+                        if scope_mask is None
+                        else rep_in[scope_mask].sum(axis=0)
+                    )
+                    scales = rep_sums / full_sum
+                    if scope_mask is None:
+                        adj *= scales
+                    else:
+                        adj[scope_mask] *= scales
             n_reps = len(rep_cols)
             new_names = [f"{wgt_name}{i}" for i in range(1, n_reps + 1)]
             sample._data = df.hstack(pl.DataFrame(adj, schema=new_names))
