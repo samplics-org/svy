@@ -180,3 +180,28 @@ def test_prop_rows_per_variable(multi_sample):
     assert isinstance(batched, list) and len(batched) == len(CS)
     for b, c in zip(batched, CS):
         assert b.to_polars().height == est.prop(c).to_polars().height
+
+
+def test_batched_prop_preserves_each_variables_levels():
+    data = pl.DataFrame(
+        {
+            "animal": pl.Series(["cat", "dog"] * 4, dtype=pl.Enum(["dog", "cat"])),
+            "grade": pl.Series(["B", "C", "A", "A"] * 2, dtype=pl.Enum(["C", "B", "A"])),
+            "w": [1.0, 2.0, 0.0, 3.0, 2.0, 1.0, 4.0, 2.0],
+        }
+    )
+    est = Sample(data, Design(wgt="w")).estimation
+    names = ["grade", "animal"]
+    batched = est.prop(names, deff="wr")
+    for name, levels, member in zip(names, [["C", "B", "A"], ["dog", "cat"]], batched):
+        single = est.prop(name, deff="wr")
+        assert member.level_orders == single.level_orders == {name: levels}
+        assert [row.y_level for row in member.estimates] == levels
+        for row, expected in zip(member.estimates, single.estimates):
+            assert (row.y, row.n, row.df) == (name, expected.n, expected.df)
+            np.testing.assert_allclose(
+                [row.est, row.se, row.lci, row.uci, row.deff],
+                [expected.est, expected.se, expected.lci, expected.uci, expected.deff],
+                rtol=RTOL,
+            )
+        np.testing.assert_allclose(member.covariance.diagonal(), single.covariance.diagonal())

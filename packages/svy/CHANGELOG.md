@@ -6,6 +6,10 @@ Companion packages track their own changes: [`svy-io`](../svy-io/CHANGELOG.md) (
 
 ## [Unreleased]
 
+### Changed
+
+- Batched Taylor means, totals, and proportions partition their result rows once. This reduces the time spent returning estimates for surveys with many outcome columns.
+
 ## [0.37.0] — 2026-11-09
 
 Requires [`svy-rs`](../svy-rs/CHANGELOG.md) 0.21.0, which carries the kernel changes below.

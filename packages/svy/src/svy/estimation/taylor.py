@@ -8,7 +8,7 @@ Helper methods are called on the Estimation instance (est._*).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Iterator, Sequence
 
 import numpy as np
 import polars as pl
@@ -22,6 +22,16 @@ from svy.estimation.estimate import Estimate
 if TYPE_CHECKING:
     from svy.core.data_prep import PreparedData
     from svy.estimation.base import Estimation
+
+
+def _outcome_frames(
+    result_df: pl.DataFrame, ys: Sequence[str]
+) -> Iterator[tuple[str, pl.DataFrame]]:
+    """Partition once, retaining the requested order and any repeated outcomes."""
+    groups = result_df.partition_by("y", include_key=False, as_dict=True)
+    empty = result_df.clear()
+    for y in ys:
+        yield y, groups.get((y,), empty)
 
 
 def taylor_mean(
@@ -124,8 +134,7 @@ def taylor_mean_multi(
     )
 
     results: list[Estimate] = []
-    for y in ys:
-        sub = result_df.filter(pl.col("y") == y)
+    for y, sub in _outcome_frames(result_df, ys):
         est_list = est._polars_result_to_param_est(
             sub, y, param, alpha, deff_ref is not None, None, False
         )
@@ -239,8 +248,7 @@ def taylor_total_multi(
     )
 
     results: list[Estimate] = []
-    for y in ys:
-        sub = result_df.filter(pl.col("y") == y)
+    for y, sub in _outcome_frames(result_df, ys):
         est_list = est._polars_result_to_param_est(
             sub, y, PopParam.TOTAL, alpha, deff_ref is not None, None, as_factor=False
         )
@@ -537,8 +545,7 @@ def taylor_prop_multi(
     )
 
     results: list[Estimate] = []
-    for y in ys:
-        sub = result_df.filter(pl.col("y") == y)
+    for y, sub in _outcome_frames(result_df, ys):
         est_list = est._polars_result_to_param_est(
             sub,
             y,
