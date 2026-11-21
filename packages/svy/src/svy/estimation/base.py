@@ -1319,12 +1319,12 @@ class Estimation:
 
     def _enum_orders(self, cols: Sequence[str]) -> dict[str, list[str]]:
         """The categories of each Enum column among ``cols``, in the Enum's order."""
-        schema = self._sample._data.collect_schema()
-        return {
-            c: list(dtype.categories)
-            for c in dict.fromkeys(cols)
-            if isinstance(dtype := schema.get(c), pl.Enum)
-        }
+        orders = {}
+        for name in dict.fromkeys(cols):
+            column = self._sample._data.get_column(name, default=None)
+            if column is not None and isinstance(column.dtype, pl.Enum):
+                orders[name] = list(column.dtype.categories)
+        return orders
 
     def _build_estimate_result_light(
         self,
